@@ -74,14 +74,13 @@ def test_action_publish_time_reads_release_not_commit() -> None:
 
 
 def test_action_publish_time_missing_release_is_not_found() -> None:
-    import io
     import urllib.error
 
     from agent.tools.actions import action_publish_time
 
     class FakeHttp:
         def get(self, url: str) -> object:
-            raise urllib.error.HTTPError(url, 404, "Not Found", hdrs={}, fp=io.BytesIO())
+            raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None)  # type: ignore[arg-type]
 
     answer = action_publish_time(FakeHttp(), "actions/checkout", "no-such-tag")  # type: ignore[arg-type]
     assert answer.found is False

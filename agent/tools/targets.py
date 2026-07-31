@@ -268,7 +268,7 @@ def _semver_line(ecosystem: str, ref: str) -> str | None:
 
 
 def _sort_versions(ecosystem: str, names: list[str]) -> list[str]:
-    def key(name: str) -> tuple:
+    def key(name: str) -> tuple[object, ...]:
         # Descending via negated compare against a sentinel is awkward; pairwise bubble via
         # compare_versions to a zero-pad is enough with tuple from regex.
         if ecosystem in {PYTHON_UV, PYTHON_PIP}:
@@ -614,7 +614,8 @@ def _for_npm(
     if not isinstance(meta, dict):
         raise ValueError("npm registry did not return a package object")
     versions = meta.get("versions")
-    times = meta.get("time") if isinstance(meta.get("time"), dict) else {}
+    raw_times = meta.get("time")
+    times: dict[str, object] = raw_times if isinstance(raw_times, dict) else {}
     if not isinstance(versions, dict):
         raise ValueError("npm package has no versions map")
     current_ver = _strip_npm_req(current)
@@ -622,7 +623,8 @@ def _for_npm(
     for name in versions:
         if not isinstance(name, str) or _is_prerelease(name):
             continue
-        published = times.get(name) if isinstance(times.get(name), str) else None
+        stamp = times.get(name)
+        published = stamp if isinstance(stamp, str) else None
         candidates.append(_Candidate(version=name, published_at=published))
     # Prefer per-version time for the newest few when package-wide time is missing.
     ordered_names = _sort_versions(NPM, [c.version for c in candidates])
@@ -774,7 +776,8 @@ def _for_bazel(
     if not isinstance(meta, dict):
         raise ValueError("BCR metadata missing")
     versions = meta.get("versions")
-    yanked = meta.get("yanked_versions") if isinstance(meta.get("yanked_versions"), dict) else {}
+    yanked_raw = meta.get("yanked_versions")
+    yanked: dict[str, object] = yanked_raw if isinstance(yanked_raw, dict) else {}
     if not isinstance(versions, list):
         raise ValueError("BCR metadata has no versions")
     repo = meta.get("repository")

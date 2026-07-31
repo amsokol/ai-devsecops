@@ -46,8 +46,8 @@ dev = [
 [tool.ruff]
 target-version = "py314"
 line-length = 100
-src = ["agent", "tests", "knowledge/scripts", "scripts"]
-extend-exclude = ["knowledge/overlay", "knowledge/capabilities", "knowledge/ecosystems"]
+src = ["agent", "tests"]
+extend-exclude = ["knowledge"]
 
 [tool.ruff.lint]
 # `S` is the security ruleset. An agent that reports insecure code has no excuse for skipping the
@@ -57,11 +57,13 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RET", "PTH", "C4", "RUF", "S"]
 [tool.ruff.lint.per-file-ignores]
 # Tests assert, and they deliberately run commands to prove the guards work.
 "tests/*" = ["S101", "S603", "S607"]
+"knowledge/scripts/*" = ["E501"]
 
 [tool.mypy]
 python_version = "3.14"
 files = ["agent", "tests"]
 strict = true
+explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 # The SDK is an optional extra. Without this, `uv sync` (no extras) makes mypy fail on the adapter

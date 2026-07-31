@@ -494,7 +494,7 @@ async def _one(
     )
     for attempt in attempted.attempts:
         await ledger.record(attempt.session.usage)
-    verification = check(() if job.awaiting_ci else surfaces, toolkit.calls)
+    verification = check({} if job.awaiting_ci else surfaces, toolkit.calls)
     if job.awaiting_ci:
         verification = replace(
             verification,
