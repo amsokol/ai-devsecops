@@ -150,7 +150,7 @@ def test_a_result_written_deeper_in_the_workspace_is_read_and_recorded_as_such(
 def test_an_analyst_result_is_kept_when_the_checkout_was_touched(
     library: Library, git_repo: Path, tmp_path: Path
 ) -> None:
-    """Analysis does not ship a branch; undoing the stray writes is enough. Retrying doubled cost."""
+    """Analysis does not ship a branch; undoing stray writes is enough. Retrying doubled cost."""
 
     class Straying(FakeBackend):
         async def execute(self, brief: Brief) -> SessionResult:

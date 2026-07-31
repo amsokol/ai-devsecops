@@ -353,9 +353,7 @@ def _decision(
     ]
 
 
-def _no_surface(
-    judged: Judged, surfaces: dict[str, tuple[tuple[str, ...], ...]] | None
-) -> bool:
+def _no_surface(judged: Judged, surfaces: dict[str, tuple[tuple[str, ...], ...]] | None) -> bool:
     if surfaces is None:
         return False
     ecosystem = judged.finding.subject.ecosystem

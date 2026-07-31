@@ -28,9 +28,7 @@ jobs:
     )
     pins = list_action_pins(tmp_path)
     names = packages(pins)
-    assert names == frozenset(
-        {"actions/checkout", "dtolnay/rust-toolchain", "eclipse-temurin"}
-    )
+    assert names == frozenset({"actions/checkout", "dtolnay/rust-toolchain", "eclipse-temurin"})
     assert "./local-action" not in names
     by_package = {pin.package: pin for pin in pins}
     assert by_package["actions/checkout"].reference == "v7"

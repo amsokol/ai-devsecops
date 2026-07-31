@@ -63,10 +63,15 @@ def arguments(
 def test_unsupported_library_contract_refuses_to_start(
     git_repo: Path, library_root: Path, overlay_root: Path, config_dir: Path, tmp_path: Path
 ) -> None:
-    """An overridden --library with an unknown contract is a startup error, not a mid-run surprise."""
-    (library_root / "library.yaml").write_text("schema: 1\ncontract_version: 999\n", encoding="utf-8")
+    """An overridden --library with an unknown contract is a startup error."""
+    (library_root / "library.yaml").write_text(
+        "schema: 1\ncontract_version: 999\n", encoding="utf-8"
+    )
     code = main(
-        ["maintain", *arguments(git_repo, library_root, overlay_root, tmp_path / "runs", config_dir)]
+        [
+            "maintain",
+            *arguments(git_repo, library_root, overlay_root, tmp_path / "runs", config_dir),
+        ]
     )
     assert code == int(ExitCode.CONFIG)
 

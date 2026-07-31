@@ -498,9 +498,7 @@ class GitHub:
 
     def note_change(self, number: int, body: str) -> None:
         # Pull request comments use the same issues comments endpoint.
-        self._api(
-            f"repos/{self.slug}/issues/{number}/comments", method="POST", body={"body": body}
-        )
+        self._api(f"repos/{self.slug}/issues/{number}/comments", method="POST", body={"body": body})
 
     def has_remote_branch(self, name: str) -> bool:
         try:

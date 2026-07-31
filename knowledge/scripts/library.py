@@ -61,8 +61,8 @@ INDEX_ORDER = ["playbook", "capability", "policy", "ecosystem", "scm", "overlay"
 
 INDEX_PREAMBLE = """# Index
 
-Generated from document headers by `scripts/library.py`. This is the only file an agent reads in full
-on every run; bodies are loaded on demand, selected by playbook, by the ecosystems the overlay
+Generated from document headers by `scripts/library.py`. This is the only file an agent reads in
+full on every run; bodies are loaded on demand, selected by playbook, by the ecosystems the overlay
 enables, and by the files a change touches.
 
 Templates under `overlay/templates/` are artefacts for products to copy and are deliberately absent

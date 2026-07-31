@@ -39,9 +39,7 @@ _ACTION_CONCRETE = re.compile(
     r"(?:[-.](?P<pre>[0-9A-Za-z.-]+))?$"
 )
 # Container tags: version numbers (`.` or `_`) plus optional variant suffix (-jdk, -bookworm, …).
-_IMAGE_TAG = re.compile(
-    r"^v?(?P<body>\d+(?:[._]\d+)*)(?P<suffix>(?:-[A-Za-z][\w.-]*)*)$"
-)
+_IMAGE_TAG = re.compile(r"^v?(?P<body>\d+(?:[._]\d+)*)(?P<suffix>(?:-[A-Za-z][\w.-]*)*)$")
 _FLOATING = frozenset({"main", "master", "latest", "stable", "head", "nightly"})
 _PRE_HINT = re.compile(r"(?i)(alpha|beta|rc|dev|pre|preview)")
 
@@ -282,9 +280,7 @@ def _sort_versions(ecosystem: str, names: list[str]) -> list[str]:
         parsed = _parse_image_tag(name)
         if parsed and len(parsed.nums) >= 2:
             return (*_image_key(name), name)
-        match = _ACTION_CONCRETE.match(name) or re.match(
-            r"^v?(\d+)\.(\d+)(?:\.(\d+))?", name
-        )
+        match = _ACTION_CONCRETE.match(name) or re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?", name)
         if match:
             groups = match.groups()
             return (*(int(g or 0) for g in groups[:3]), name)
@@ -345,9 +341,7 @@ def _for_image(
     name_filter = f"{line}." if line else None
     tagged = _hub_tags(http, repo, name_filter=name_filter)
     concrete = [
-        name
-        for name, _ in tagged
-        if _image_concrete(name) and _image_same_line(current, name)
+        name for name, _ in tagged if _image_concrete(name) and _image_same_line(current, name)
     ]
     times = {name: when for name, when in tagged if name in set(concrete)}
     concrete = _sort_image(concrete)
@@ -647,9 +641,7 @@ def _for_npm(
             elif isinstance(detail.get("publish_time"), (int, float)):
                 published = datetime.utcfromtimestamp(detail["publish_time"]).isoformat() + "Z"
         filled.append(_Candidate(version=name, published_at=published))
-    filled.extend(
-        c for c in candidates if c.version not in {f.version for f in filled}
-    )
+    filled.extend(c for c in candidates if c.version not in {f.version for f in filled})
     return _from_candidates(
         ecosystem=NPM,
         kind="",
@@ -794,9 +786,7 @@ def _for_bazel(
     owner_repo = _github_owner_repo(github) if github else None
     current_ver = current.strip()
     names = [
-        v
-        for v in versions
-        if isinstance(v, str) and v not in yanked and not _is_prerelease(v)
+        v for v in versions if isinstance(v, str) and v not in yanked and not _is_prerelease(v)
     ]
     names = [v for v in _sort_versions(BAZEL, names) if _on_line(BAZEL, current_ver, v)]
     candidates: list[_Candidate] = []
@@ -889,7 +879,7 @@ def _for_bsr(
             return empty
         try:
             candidates = _bsr_candidates_from_github(http, owner_repo)
-        except (ValueError, urllib.error.HTTPError, NotPermitted, HostNotPermitted):
+        except ValueError, urllib.error.HTTPError, NotPermitted, HostNotPermitted:
             return empty
 
     if not candidates:

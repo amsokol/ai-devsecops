@@ -65,7 +65,9 @@ def test_committer_date_publish_time_fails_the_sweep(tmp_path: Path) -> None:
     )
     bad = Evidence.verified(
         question="publish-time",
-        subject=Subject(ecosystem="ecosystems/github-actions", package="actions/checkout", version="v7"),
+        subject=Subject(
+            ecosystem="ecosystems/github-actions", package="actions/checkout", version="v7"
+        ),
         value="2026-07-17T18:45:11Z",
         origin=Origin.API,
         source=(

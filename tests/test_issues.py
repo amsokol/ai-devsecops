@@ -351,7 +351,7 @@ def test_a_capability_that_never_ran_cannot_close_anything(platform: FakePlatfor
 
 
 def test_one_ecosystem_of_a_capability_cannot_close_another(platform: FakePlatform) -> None:
-    """`--only deps-outdated@cargo` must not close a python-uv issue: same capability, different task."""
+    """`--only deps-outdated@cargo` must not close a python-uv issue of the same capability."""
     cargo_cap = "capabilities/deps-outdated"
     cargo = Finding(
         capability=cargo_cap,

@@ -149,9 +149,7 @@ def test_abandoned_branch_is_reclaimed_then_planned(
     assert [job.branch for job in queue.jobs] == [branch]
 
 
-def test_open_pr_is_never_reclaimed(
-    library: Library, overlay: Overlay, git_repo: Path
-) -> None:
+def test_open_pr_is_never_reclaimed(library: Library, overlay: Overlay, git_repo: Path) -> None:
     item = _judged()
     branch = branch_for(item)
     repository = Repository.open(git_repo)

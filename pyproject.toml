@@ -46,7 +46,8 @@ dev = [
 [tool.ruff]
 target-version = "py314"
 line-length = 100
-src = ["agent", "tests"]
+src = ["agent", "tests", "knowledge/scripts", "scripts"]
+extend-exclude = ["knowledge/overlay", "knowledge/capabilities", "knowledge/ecosystems"]
 
 [tool.ruff.lint]
 # `S` is the security ruleset. An agent that reports insecure code has no excuse for skipping the

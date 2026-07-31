@@ -374,9 +374,7 @@ class Toolkit:
                         ),
                         "package": _string("package, module, crate, or image/action name"),
                         "current": _string("current pin or requirement as declared"),
-                        "kind": _string(
-                            "required for github-actions only: 'action' or 'image'"
-                        ),
+                        "kind": _string("required for github-actions only: 'action' or 'image'"),
                     },
                     required=["ecosystem", "package", "current"],
                 ),
