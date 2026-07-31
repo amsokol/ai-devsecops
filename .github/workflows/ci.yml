@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  runner:
+    name: Runner — lint, types, tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Installed from PyPI at an exact version rather than through a third-party action: fewer
+      # parties in the supply chain, and the version cannot drift between runs.
+      - name: Install uv
+        run: pipx install uv==0.12.0
+
+      - name: Sync dependencies
+        # The cursor extra is for typing the adapter against the real SDK. Runtime still treats it
+        # as optional: select.py refuses to start that backend when the package is absent.
+        run: uv sync --frozen --extra cursor
+
+      - name: Ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy
+
+      - name: Tests
+        run: uv run pytest -q
+
+      - name: CLI help
+        run: uv run agent --help
+
+  knowledge:
+    name: Knowledge — lint and contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Markdown lint
+        run: npx --yes markdownlint-cli2@0.23.2 "**/*.md"
+
+      - name: Library contracts, links and index
+        working-directory: knowledge
+        run: python3 scripts/library.py check

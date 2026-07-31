@@ -1,0 +1,31 @@
+# Which tasks exist when maintaining the default branch.
+#
+# There is no diff here, so code work is scoped to the hotspots the overlay names and dependency
+# work covers the full graph of every enabled ecosystem.
+
+playbook: playbooks/maintain
+
+triggers:
+  - maintain-requested
+  - maintain-scheduled
+  # A comment on one of the agent's issues is maintenance work with a person waiting for it, so the
+  # same tasks are planned. What the comment asks for then narrows that plan to the one finding the
+  # issue tracks — or replaces it with an answer, when nothing needs re-establishing.
+  - comment-on-issue
+
+split_threshold_bytes: 400000
+
+tasks:
+  - capability: capabilities/code-quality
+    when: hotspots-present
+
+  - capability: capabilities/code-vuln
+    when: hotspots-present
+
+  - capability: capabilities/deps-outdated
+    when: ecosystem-enabled
+    per_ecosystem: true
+
+  - capability: capabilities/deps-vuln
+    when: ecosystem-enabled
+    per_ecosystem: true

@@ -1,0 +1,65 @@
+# The agent's own limit on what it will execute and reach, regardless of what a knowledge document
+# asks for. Requests above this line are refused at startup, not mid-run.
+#
+# Widening this is a deliberate act: replace the configuration directory with --config-dir. A product
+# whose images come from a private registry adds that host here, because the overlay is not allowed
+# to grant hosts or binaries.
+
+binaries:
+  # Version control
+  #
+  # No hosting client. A task's commands are given an environment with no credentials, so a client
+  # that authenticates before it answers can only fail — and the agent's own publishing does not come
+  # through here. Ask the platform's API instead.
+  - git
+  # Python
+  - uv
+  - pip
+  - pip-compile
+  - pip-audit
+  - python
+  # Node
+  - npm
+  - pnpm
+  - yarn
+  # Rust
+  - cargo
+  - cargo-audit
+  - cargo-deny
+  - cargo-outdated
+  # Go
+  - go
+  - govulncheck
+  # Schemas and build systems
+  - buf
+  - bazel
+  # Container image metadata
+  - skopeo
+
+hosts:
+  - api.github.com
+  - github.com
+  - raw.githubusercontent.com
+  - pypi.org
+  - registry.npmjs.org
+  - crates.io
+  - index.crates.io
+  - proxy.golang.org
+  - sum.golang.org
+  - buf.build
+  - registry.bazel.build
+  # Container image metadata
+  - hub.docker.com
+  - registry-1.docker.io
+  - auth.docker.io
+  - ghcr.io
+
+# Egress policy: what may leave the run at all. Enforced by the backend port, recorded in the
+# manifest, and deliberately stated before a second SDK exists.
+egress:
+  # Paths whose contents are never sent to a model, however a task asks for them.
+  never_send:
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/.env"
+    - "**/secrets/**"

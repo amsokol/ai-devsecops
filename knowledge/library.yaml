@@ -1,0 +1,9 @@
+# Machine-readable identity of the knowledge tree shipped with the agent.
+#
+# The product version is the agent release in pyproject.toml — runner and knowledge move together.
+# This file only names the result.json contract the prose assumes.
+
+schema: 1
+
+# Version of CONTRACT.md that this tree implements.
+contract_version: 2

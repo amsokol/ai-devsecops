@@ -1,0 +1,73 @@
+[project]
+name = "ai-devsecops-agent"
+version = "0.3.0"
+description = "Model-agnostic AI DevSecOps agent: runner and knowledge library as one release"
+requires-python = ">=3.14"
+license = "Apache-2.0"
+dependencies = [
+    "pyyaml==6.0.3",
+]
+
+[project.scripts]
+agent = "agent.cli:main"
+
+[project.optional-dependencies]
+# Optional at runtime: a product that never uses the Cursor backend should not download it. CI and
+# local type-checking install the extra so the adapter is checked against the real SDK.
+cursor = [
+    "cursor-sdk==1.0.26",
+]
+
+[build-system]
+requires = ["hatchling==1.31.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent"]
+
+# One release = code + judgement. The tree keeps knowledge/ at the repo root for editing; the wheel
+# carries it next to the package so an installed agent needs no --library path.
+[tool.hatch.build.targets.wheel.force-include]
+"knowledge" = "agent/knowledge"
+[tool.uv]
+package = true
+
+[dependency-groups]
+# Pinned exactly: a linter that changes version between a local run and CI produces findings nobody
+# asked for, at the worst possible moment.
+dev = [
+    "mypy==2.3.0",
+    "pip-audit==2.10.1",
+    "pytest==9.1.1",
+    "ruff==0.16.0",
+    "types-pyyaml==6.0.12.20260724",
+]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["agent", "tests"]
+
+[tool.ruff.lint]
+# `S` is the security ruleset. An agent that reports insecure code has no excuse for skipping the
+# same checks on itself, and it makes every subprocess and network call an explicit decision.
+select = ["E", "F", "I", "B", "UP", "SIM", "RET", "PTH", "C4", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, and they deliberately run commands to prove the guards work.
+"tests/*" = ["S101", "S603", "S607"]
+
+[tool.mypy]
+python_version = "3.14"
+files = ["agent", "tests"]
+strict = true
+
+[[tool.mypy.overrides]]
+# The SDK is an optional extra. Without this, `uv sync` (no extras) makes mypy fail on the adapter
+# file even though the import is only reached when the extra is installed. When the package is
+# present, mypy uses its real types; the override only covers the missing-module case.
+module = ["cursor_sdk", "cursor_sdk.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

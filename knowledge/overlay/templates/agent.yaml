@@ -1,0 +1,109 @@
+# Agent overlay — PRODUCT_NAME
+#
+# Values the agent acts on. Knowledge for the model belongs in NOTES.md: nothing here is prose, and
+# nothing there is a value. An unknown key is a startup error, so a typo cannot pass unnoticed.
+#
+# The agent does two things, and the first two sections are those two things. Everything about a kind
+# of run lives inside the block named after it: which models do the work, what it may spend, and —
+# for maintenance — how much it may leave behind.
+
+schema: 1
+
+# A CHANGE CAME UP FOR REVIEW: find the problems, decide whether it may merge. Somebody is waiting.
+review:
+  models:
+    # `provider/model`: the provider on the left decides which models exist, so the name on the right
+    # is an address only together with it. Moving to another provider is one word on one line.
+    # Credentials come from the environment, never from this file — it is in version control.
+    analyst: cursor/composer-2.5   # reviews the change and reports what is wrong with it
+
+    # The two roles a comment wakes. Somebody replied in one of the agent's threads: `intent` reads
+    # what they ask for — one short session with no tools, so the cheapest model that reads English
+    # belongs here — and `writer` answers them in prose. Neither ever changes a file.
+    intent: cursor/composer-2.5
+    writer: cursor/composer-2.5
+
+  # Reaching any limit below has one and the same effect: the work is reported as unfinished and the
+  # merge is refused — never as "nothing found". Write `null` for no ceiling: a decision on the
+  # record rather than a key nobody typed.
+  limits:
+    # Tokens the whole run may spend, where the backend reports usage. Lower: a big change stops
+    # half-way and the gate says "did not finish". Higher: a runaway run costs more before it is cut
+    # off. For scale, a four-task review of a small change measures a few million.
+    tokens_per_run: 24000000
+
+    # Time one task gets. Lower: a slow task is cut off as unfinished. Higher: a stuck task holds the
+    # run open for longer before anyone learns it went wrong.
+    minutes_per_task: 15
+
+    # Tasks running at once. Higher: the review finishes sooner, until the provider starts refusing
+    # on its own rate limit. Lower: fewer refusals, longer wall clock.
+    tasks_at_once: 4
+
+# THE MAIN BRANCH IS BEING MAINTAINED: find the problems, fix what can be fixed and prove it safe.
+# On a schedule or started by hand — the work is the same, so the numbers are the same.
+maintenance:
+  models:
+    analyst: cursor/composer-2.5   # finds what has gone stale or become vulnerable
+    fixer: cursor/composer-2.5     # writes the fix and runs the verification below
+    intent: cursor/composer-2.5    # reads what a comment on one of the agent's issues asks for
+    writer: cursor/composer-2.5    # answers it, when answering is all it asks for
+
+  # Usually below the review's numbers: this run spends while nobody is watching it, and a mistake
+  # here should not arrive as an invoice a month later.
+  limits:
+    tokens_per_run: 12000000
+    minutes_per_task: 10
+    tasks_at_once: 2
+
+  # How much this run may leave behind. Not what it costs — how loud it is. Reaching either limit
+  # defers work to the next run and says so in the record; nothing is dropped.
+  queue:
+    # New issues one run may open. Lower: a quieter tracker, and more findings waiting for next week.
+    max_new_issues_per_run: 5
+
+    # Fix branches allowed to be open for review at once. Reached: no new branch is prepared until
+    # one of them is merged or closed.
+    max_open_fix_requests: 3
+
+# WHAT IS LOOKED AT for dependency work, by library identifier. Only these are looked at.
+ecosystems:
+  - ecosystems/python-uv
+  # - ecosystems/python-pip-compile
+  # - ecosystems/npm
+  # - ecosystems/cargo
+  # - ecosystems/go-modules
+  # - ecosystems/github-actions
+  # - ecosystems/bazel
+  # - ecosystems/bsr
+
+# WHAT MATTERS MOST: source trees and manifests deserving the most attention, most important first.
+hotspots:
+  - path/to/primary/source
+  - path/to/manifest
+
+# HOW LONG TO WAIT before adopting a freshly published version.
+quarantine:
+  days: 7
+
+# WHAT IS ALLOWED TO BREAK THE RULES, and why. Every exception needs a subject and a reason: one
+# without a reason is indistinguishable from an accident. `quarantine` is the only scope so far.
+exceptions: []
+  # - subject: package-name
+  #   scope: quarantine
+  #   reason: the fix for GHSA-xxxx-xxxx is only published inside the window
+
+# HOW A FIX IS PROVED SAFE: commands per surface, in the order they must run, each a list of
+# arguments — there is no shell, so pipes, redirection and chaining are unavailable. Without this
+# section no fix is prepared at all, because an unverified fix is not shipped.
+#
+# A surface named after an enabled ecosystem (the short id after `ecosystems/`) is selected for
+# findings of that ecosystem. Omit a surface on purpose when nothing here can prove a fix for that
+# ecosystem — those findings stay human-only; say why in NOTES.md. Any other surface name runs only
+# when a library rule or a note in NOTES.md requires it.
+verification:
+  python-uv:
+    - [uv, sync, --frozen]
+    - [uv, run, pytest]
+  # codegen:
+  #   - [buf, generate]

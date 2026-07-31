@@ -1,0 +1,350 @@
+"""Command line: one command with subcommands, usable in CI and locally.
+
+Nothing here is interactive. A run happens in CI, so a prompt for confirmation would be a
+configuration error rather than a pause.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+
+from agent import __version__
+from agent.domain import Trigger
+from agent.errors import AgentError, ConfigError, ExitCode
+from agent.library import default_library_root
+from agent.manifest import read_manifest
+from agent.orchestrator import REPORT, Request, RunRecord, run
+from agent.scm.port import Identity
+from agent.wake import Wake
+
+DEFAULT_OVERLAY = ".devsecops"
+DEFAULT_RUN_DIR = ".agent/runs"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agent", description=__doc__.splitlines()[0])
+    parser.add_argument("--version", action="version", version=__version__)
+    subcommands = parser.add_subparsers(dest="command", required=True)
+
+    review = subcommands.add_parser("review", help="review a proposed change and produce a verdict")
+    _add_common(review)
+    review.add_argument("--change", type=int, help="change request number in the hosting platform")
+    review.add_argument("--base", default="main", help="branch the change is proposed against")
+    review.add_argument(
+        "--trigger",
+        choices=[Trigger.CHANGE_OPENED.value, Trigger.CHANGE_UPDATED.value],
+        default=Trigger.CHANGE_OPENED.value,
+    )
+    review.add_argument(
+        "--publish",
+        action="store_true",
+        help=(
+            "post the decision on the change: one review body, one thread per finding, and threads "
+            "of fixed findings resolved. Needs --change and a credential the client can read"
+        ),
+    )
+    review.add_argument(
+        "--outside",
+        action="store_true",
+        help=(
+            "treat the head as code from outside this repository: read it, execute nothing from "
+            "it, prepare no fix. Established from the platform when it can be asked, so this is "
+            "for the cases where it cannot"
+        ),
+    )
+    _add_wake(review)
+
+    maintain = subcommands.add_parser("maintain", help="maintain the default branch")
+    _add_common(maintain)
+    maintain.add_argument("--wake-issue", type=int, help="issue whose comment woke this run")
+    _add_wake(maintain)
+    maintain.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="this run came from a schedule, so the restraint rules for unattended runs apply",
+    )
+    maintain.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "analyse and say which findings would be fixed, without touching the repository: no "
+            "worktree, no branch, no commit"
+        ),
+    )
+    maintain.add_argument(
+        "--publish",
+        action="store_true",
+        help=(
+            "track findings as issues: one per finding, brought up to date rather than duplicated, "
+            "and closed with evidence when the check that owns it ran clean and found nothing"
+        ),
+    )
+
+    explain = subcommands.add_parser("explain", help="show a recorded run")
+    explain.add_argument("--run", required=True, help="run identifier")
+    explain.add_argument("--run-dir", type=Path, default=Path(DEFAULT_RUN_DIR))
+
+    return parser
+
+
+def _add_wake(parser: argparse.ArgumentParser) -> None:
+    """How a run says it was woken by a comment: which comment, and whose action it was.
+
+    Both are required together. The comment identifier is what the run reads — a wake with no text
+    to read is a run that guesses what it was asked — and the account is what it checks before
+    spending anything. Either alone is a workflow that is not passing what the event gave it.
+    """
+    parser.add_argument(
+        "--wake-comment",
+        type=int,
+        help=(
+            "identifier of the comment that woke this run. With --wake-issue for a comment on an "
+            "issue, with --change for a reply in a review thread"
+        ),
+    )
+    parser.add_argument(
+        "--actor",
+        default="",
+        help=(
+            "login whose comment woke this run. A bot's comment, the agent's own account, or an "
+            "account with no write access ends the run before it spends anything"
+        ),
+    )
+
+
+def _add_common(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--repo", type=Path, default=Path.cwd(), help="target repository")
+    parser.add_argument(
+        "--library",
+        type=Path,
+        default=None,
+        help=(
+            "knowledge library directory (default: the copy bundled with this agent). Override "
+            "only for tests or local experiments"
+        ),
+    )
+    parser.add_argument(
+        "--overlay",
+        type=Path,
+        default=None,
+        help=f"product overlay directory (default: <repo>/{DEFAULT_OVERLAY})",
+    )
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        default=Path(DEFAULT_RUN_DIR),
+        help=(
+            f"where the run record goes; a relative path is under the repository (default: "
+            f"<repo>/{DEFAULT_RUN_DIR})"
+        ),
+    )
+    parser.add_argument("--config-dir", type=Path, default=None, help="replace built-in config")
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="build and print the plan without executing tasks; claims nothing about the code",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="ignore the cache of immutable facts, to prove a verdict reproduces without it",
+    )
+    parser.add_argument(
+        "--only",
+        action="append",
+        metavar="TASK",
+        help=(
+            "run only this planned task, repeatable. For development: the verdict then covers the "
+            "named tasks and nothing else, and the run says so"
+        ),
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="print the manifest instead of a summary"
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
+    try:
+        if arguments.command == "explain":
+            print(json.dumps(read_manifest(arguments.run_dir, arguments.run), indent=2))
+            return int(ExitCode.OK)
+        record = run(_request(arguments))
+    except AgentError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return int(error.exit_code)
+    if arguments.json:
+        print(json.dumps(record.manifest.as_json(), indent=2, ensure_ascii=False))
+    else:
+        _print_summary(record)
+    return int(record.exit_code)
+
+
+def _request(arguments: argparse.Namespace) -> Request:
+    woken = _wake(arguments)
+    repository = arguments.repo.resolve()
+    return Request(
+        trigger=_trigger(arguments, woken),
+        repository=repository,
+        library_path=arguments.library or default_library_root(),
+        overlay_path=arguments.overlay or repository / DEFAULT_OVERLAY,
+        run_dir=_under(repository, arguments.run_dir),
+        config_dir=arguments.config_dir,
+        base=getattr(arguments, "base", None),
+        change=getattr(arguments, "change", None),
+        wake=woken,
+        plan_only=arguments.plan_only,
+        outside=getattr(arguments, "outside", False),
+        dry_run=getattr(arguments, "dry_run", False),
+        publish=getattr(arguments, "publish", False),
+        use_cache=not arguments.no_cache,
+        only=tuple(arguments.only or ()),
+    )
+
+
+def _under(repository: Path, given: Path) -> Path:
+    """A place the agent writes, made absolute against the repository it is working on.
+
+    The same rule the caches follow, and now one rule instead of two. It was two, and the second one
+    was the working directory of whoever typed the command: in CI that is the repository, so nothing
+    ever disagreed, and on a laptop invoked from the agent's own checkout it disagreed silently. The
+    run record went to one repository while `git worktree add`, which takes its relative paths from
+    the repository it is given, put the fix in the other. Both existed. The agent then looked for a
+    fix in the tree that never had one and died on `git status` in a directory that was not there,
+    after paying for every session in the run.
+    """
+    return given if given.is_absolute() else (repository / given).resolve()
+
+
+def _wake(arguments: argparse.Namespace) -> Wake | None:
+    """What woke this run, when a comment did — refusing anything half-stated.
+
+    A missing piece is a workflow that is not passing what its event gave it, and every way of
+    guessing the rest is worse than saying so: without the comment the run does not know what it was
+    asked, and without the account it cannot tell a colleague from its own last comment.
+    """
+    comment = getattr(arguments, "wake_comment", None)
+    issue = getattr(arguments, "wake_issue", None)
+    change = getattr(arguments, "change", None)
+    actor = (getattr(arguments, "actor", "") or "").strip()
+    if comment is None:
+        if issue is not None:
+            raise ConfigError(
+                "--wake-issue names the issue but not the comment; add --wake-comment, because a "
+                "run woken by somebody's words has to read them"
+            )
+        if actor:
+            raise ConfigError(
+                "--actor says who woke this run, but nothing says with which comment; add "
+                "--wake-comment"
+            )
+        return None
+    if issue is None and change is None:
+        raise ConfigError(
+            "--wake-comment needs the conversation it is in: --wake-issue for a comment on an "
+            "issue, --change for a reply in a review thread"
+        )
+    if not actor:
+        raise ConfigError(
+            "--wake-comment needs --actor: the account is checked before anything is spent, and an "
+            "unattributed wake cannot be told from the agent's own comment"
+        )
+    return Wake(actor=actor, comment=comment, issue=issue, change=change if issue is None else None)
+
+
+def _trigger(arguments: argparse.Namespace, woken: Wake | None) -> Trigger:
+    """Which trigger this is: the place a comment was left decides it, before any model runs.
+
+    A schedule outranks a wake, because a scheduled run passes no comment; between the two comment
+    triggers it is the conversation that decides, and the decision is arithmetic rather than
+    judgement. What the comment *says* changes the course later, never the playbook.
+    """
+    if arguments.command == "maintain":
+        if arguments.scheduled:
+            return Trigger.MAINTAIN_SCHEDULED
+        return Trigger.COMMENT_ON_ISSUE if woken is not None else Trigger.MAINTAIN_REQUESTED
+    return Trigger.COMMENT_ON_CHANGE if woken is not None else Trigger(arguments.trigger)
+
+
+def _print_actions(actions: dict[str, Any]) -> None:
+    """What the run did on the platform, including the threads it deliberately left as they were.
+
+    "Unchanged" is worth a line: the whole promise of publishing by finding key is that a rerun does
+    not comment again, and a summary that only listed writes could not show it kept the promise.
+    """
+    if not actions:
+        return
+    identity = actions.get("identity")
+    who = Identity(**identity).description if isinstance(identity, dict) else "an unknown account"
+    for part in ("review", "issues", "changes"):
+        block = actions.get(part)
+        if not isinstance(block, dict):
+            continue
+        for item in block.get("posted") or []:
+            detail = f"  {item['detail']}" if item.get("detail") else ""
+            print(f"  {item['what']:<10} {item['key']}{detail}")
+    review = actions.get("review")
+    if isinstance(review, dict) and review.get("published"):
+        print(f"published {review.get('stance')} as {who}  {review.get('reference')}")
+    tracked = actions.get("issues")
+    if isinstance(tracked, dict):
+        print(f"issues    {tracked['raised']} raised, {tracked['closed']} closed, as {who}")
+    opened = actions.get("changes")
+    if isinstance(opened, dict):
+        print(f"changes   {opened['opened']} proposed, as {who}")
+
+
+def _print_wake(wake: dict[str, Any]) -> None:
+    """Who woke the run, and how their comment was read.
+
+    Printed together on purpose: "read as unlock, so it rechecked" is the one line that explains why
+    a run somebody started by typing a sentence did what it did.
+    """
+    if not wake:
+        return
+    intent = wake.get("intent") or "unread"
+    sure = "" if wake.get("confident", True) else ", unsure"
+    print(f"woken by {wake.get('actor')} on {wake.get('where') or 'a comment'}")
+    print(f"  read as {intent}{sure} → {wake.get('course', 'none')}")
+    if wake.get("finding"):
+        print(f"  about {wake['finding']}")
+
+
+def _print_summary(record: RunRecord) -> None:
+    manifest = record.manifest
+    print(f"run {manifest.run_id}  {manifest.playbook}  trigger {manifest.trigger}")
+    print(f"library {manifest.library['version']} ({manifest.library['digest'][:19]}…)")
+    _print_wake(manifest.wake)
+    for task in manifest.tasks:
+        state = task.outcome.value if task.outcome else "planned"
+        reason = f" ({task.reason.value})" if task.reason else ""
+        print(f"  task {task.id:<28} {state}{reason}  scope: {len(task.scope)} path(s)")
+    for entry in manifest.skipped:
+        print(f"  n/a  {entry['capability']:<28} {entry['reason']}")
+    for warning in manifest.warnings:
+        print(f"  warning: {warning}")
+    for finding in manifest.findings:
+        marker = "block" if finding["action"] == "block" else "note "
+        print(f"  {marker} {finding['severity']:<8} {finding['key']}")
+    for fix in manifest.fixes:
+        where = fix["branch"] or fix["detail"] or fix["outcome"]
+        print(f"  {fix['outcome']:<10} {fix['finding']}\n             {where}")
+    for entry in manifest.remediation.get("deferred", []):
+        print(f"  deferred   {entry['finding']}\n             {entry['reason']}")
+    _print_actions(manifest.actions)
+    if manifest.cost.get("known"):
+        print(f"cost {manifest.cost['tokens']} tokens over {manifest.cost['sessions']} session(s)")
+    print(f"result {manifest.result}  exit {int(record.exit_code)}")
+    print(f"manifest {record.manifest_path}")
+    if record.report:
+        print(f"report {record.manifest_path.parent / REPORT}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

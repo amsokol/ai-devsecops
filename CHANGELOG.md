@@ -1,0 +1,341 @@
+# Changelog
+
+What changed in the agent (runner + bundled knowledge), and why. Written for whoever has to decide
+whether to move a product's runner pin: every entry says what a run will do differently afterwards.
+Judgement-only notes also appear under [`knowledge/CHANGELOG.md`](knowledge/CHANGELOG.md); both bump
+the same product version.
+
+Versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html) read as Cargo reads it
+while the major number is `0`: the **middle** number moves on a breaking change, and the **last** one
+on everything else, fixes and additions included. Breaking means a product has to change something to
+adopt it — the command line, the overlay shape, a required overlay key, or the library contract.
+Until 1.0 those are all still allowed to move; every time one does, it is named here.
+
+## 0.3.0 — 2026-07-31
+
+Breaking: monorepo release. Knowledge ships inside the agent; no library pin, digest verification, or
+`agent pin`.
+
+### Changed
+
+- Bundle `knowledge/` in the wheel; default library path is the bundled copy (`--library` override
+  remains for tests).
+- Remove `agent/config/library.yaml`, `LibraryPin`, `check_pinned`, `min_agent_version`, and the
+  `agent pin` command.
+- One product version in `pyproject.toml`; `knowledge/library.yaml` keeps only `contract_version`.
+- Manifest `library.version` is the agent version; content digest is recorded for audit only.
+
+## 0.2.5 — 2026-07-28
+
+Pins knowledge library `0.5.7` (contract version 2). Cut token waste on maintain: trust
+`cleared_pin_target`, fix BSR plugins, salvage analyst results after stray checkout writes.
+
+### Changed
+
+- `cleared_pin_target` for BSR: try `buf registry module label list`, then `plugin label list`
+  (remote plugins were returning a false null `target` and models crawled `buf` by hand). When both
+  yield no labels (empty success for protoc plugins such as buffa), fall back to GitHub Releases for
+  `owner/name`. Preserve the pin's `v` prefix on `target` / `pending`.
+- Analyst sessions that write into the repository checkout: undo the stray writes and **keep** a
+  valid `result.json` (fixer still refused). Avoids a full second analyst session (~millions of
+  tokens on demo2 BSR after `buf generate` under `sandbox: false`).
+- Pins knowledge `0.5.7`, which forbids re-querying registries after `cleared_pin_target` answers.
+
+## 0.2.4 — 2026-07-28
+
+Pins knowledge library `0.5.6` (contract version 2). Deterministic `Moves to` for all listed
+ecosystems.
+
+### Changed
+
+- Tool `cleared_pin_target`: backends for cargo (crates.io), npm, PyPI (python-uv /
+  python-pip-compile), go-modules (proxy), bazel (BCR + upstream Release), and bsr (`buf` label
+  list). Schema requires `ecosystem`; `kind` only for github-actions. Same target / pending /
+  current_* outcomes; major jumps stay off routine `target`.
+- Image pins (`kind=image`): universal tag parse (numeric parts + variant suffix) — not Temurin/JDK
+  only. Channels like `25-jdk` / `1.24-bookworm` resolve to newest cleared concrete on the same
+  major and suffix.
+- Scheduled/manual maintain posts an issue comment when a fix is refused or a verified branch
+  cannot be proposed (wake already did). Silence after an attempted fix is no longer allowed.
+- Absence settlement is per ecosystem task: `--only deps-outdated@cargo` cannot close a
+  python-uv (or other ecosystem) issue of the same capability.
+- [`DESIGN.md`](DESIGN.md) Found in operation item 9 marked Done for all listed ecosystems.
+
+## 0.2.3 — 2026-07-28
+
+Pins knowledge library `0.5.5` (contract version 2). Deterministic `Moves to` for github-actions.
+
+### Added
+
+- Tool `cleared_pin_target`: lists action tags or Hub image tags on the pin's line, applies
+  quarantine, returns newest cleared `target` and `pending` young tips. Routine outdated/floating
+  findings must use this for `Moves to` (knowledge). Security `needs_unlock` unchanged.
+
+### Changed
+
+- [`DESIGN.md`](DESIGN.md) Found in operation item 9 marked Done for github-actions.
+
+## 0.2.2 — 2026-07-27
+
+Pins knowledge library `0.5.4` (contract version 2). Behaviour change on github-actions outdated
+sweeps (deterministic census and Release publish time) and on quarantine findings that already name
+a cleared `Moves to`.
+
+### Added
+
+- Tool `list_action_pins`: walks `.github/workflows` and `.github/actions` for third-party `uses:`
+  and container `image:` pins. After a `deps-outdated@github-actions` result, the executor fails the
+  task when Coverage subjects do not cover that census — a partial sweep no longer publishes.
+- Tool `action_publish_time`: GitHub Release `published_at` for an action tag. A publish-time fact
+  that cites `committer.date` fails the task (live miss: commit earlier than Release falsely cleared
+  quarantine and closed demo2 #4).
+
+### Changed
+
+- Routine quarantine is clock-only only when `target` is empty. With a cleared target the issue uses
+  the remediable (human-only / major) footer; unlock may proceed, including `awaiting_ci` when there
+  is no verification surface. Refuse-unlock skips when the issue body already has `Moves to`.
+- Absence closure: a `:quarantine` finding is **not** closed on the first answer just because a person
+  commented (unlock wake). It still needs the usual two consecutive complete absences — otherwise a
+  single wrong recheck closes a forbidden-state issue while the person is watching.
+- [`DESIGN.md`](DESIGN.md) Found in operation items 1 (github-actions census) and 10 (cleared target)
+  marked Done in agent 0.2.2; committer-clock miss recorded.
+
+## 0.2.1 — 2026-07-27
+
+Pins knowledge library `0.5.3` (contract version 2). Behaviour change on quarantine findings and on
+fix-branch lifecycle when a pull request is already open or was closed.
+
+### Changed
+
+- A `kind: quarantine` finding's issue says **Waiting for quarantine**, not waiting for a person, even
+  when the overlay has no verification surface. An unlock comment on that issue is refused without a
+  stamp and without a recheck; the reply says the agent will not prepare a change while the window
+  holds. Approvals do not put routine quarantine on the fix queue.
+- A security finding with `needs_unlock` (only fixed version still inside quarantine) offers unlock as
+  an explicit security exception — advisory outweighs the window — and a grant prepares as before
+  (local verify or `awaiting_ci`).
+- Open fix PR: comment on the finding's issue with the PR link (and drifted `Moves to` when it
+  differs); do not prepare a second branch or silently retarget the open PR. Closed/abandoned
+  `agent/…` tip: note on the closed CR, delete the refs, recreate from default, open a **new** PR.
+- [`DESIGN.md`](DESIGN.md) Found in operation records enumeration gaps, drifting `Moves to`, and
+  cleared-target-vs-clock-only footer (items 1, 9, 10).
+
+## 0.2.0 — 2026-07-27
+
+Pins knowledge library `0.5.2` (contract version 2). Behaviour change in the fix queue: a product
+that relied on the agent attempting fixes for ecosystems with no verification surface will see those
+findings deferred instead, unless a person unlocks a CI pull request on the issue.
+
+### Changed
+
+- An enabled ecosystem with no overlay verification surface is human-only from planning time: no
+  fixer session is started, and the deferred reason says a person may comment to ask for a pull
+  request. The same unlock stamp that releases a major hold authorises that prepare; the branch
+  ships as `awaiting_ci` and the change request states that CI on the PR is the proof — never as
+  locally verified.
+- Issue bodies for those findings ask for a pull request rather than only for a verified fix. Intent
+  classification treats "make a PR" / "open a pull request so CI can check it" as `unlock`.
+
+## 0.1.0 — 2026-07-26
+
+First release of the runner. Pins knowledge library `0.5.1` (contract version 2).
+
+### Added
+
+- A deterministic core with the model kept to the parts that need judgement. Planning, evidence
+  keeping, deduplication, the verdict table and every arithmetic are code; the models analyse, decide
+  severity and write prose. Facts come from tools — registries, advisories, the repository — never
+  from a model's memory.
+- Analysis tasks per capability, run concurrently, each in its own session with its own budget, and a
+  run record naming every model, library digest, token count and piece of evidence behind the
+  verdict.
+- A tool registry the subagents share: reading files, the changed lines of a diff, running the
+  commands an ecosystem declared, and fetching from the hosts it declared, all within a ceiling the
+  agent owns.
+- Roles bound to a backend and model by the product, checked against what each adapter can do before
+  anything is spent. The Cursor SDK is the first adapter; the port exists so a second one does not
+  touch the core.
+- A `fixer` role for maintenance runs: it edits files in an isolated worktree, and the agent stages,
+  commits, pushes and proposes. A fix ships only when every command of its surface passed, and a
+  failure that was already red on the unchanged head is reported as pre-existing rather than blamed
+  on the fix.
+- Publishing that reconciles instead of repeating: review threads and issues are matched by finding
+  key, updated in place while a problem persists, and closed with evidence when it is gone. The agent
+  publishes as itself through a GitHub App, never as the developer who started the run.
+- Restraints for the run nobody watches: silence when there is nothing new, a ceiling on how many
+  issues and fix branches it may leave behind, its own spending limits, cross-run memory in
+  `refs/agent/state`, and an escalation issue when the same check fails twice in a row.
+- Being woken by a comment: somebody replies in one of the agent's threads or on one of its issues,
+  the `intent` role reads what they ask for, and a table in code turns that into one of four courses
+  — answer in prose, prepare the change and offer it, re-establish the one finding it was written on,
+  or do nothing. Where the comment was left decides the playbook before any model runs; what it says
+  decides only the course.
+- An answer to "how do I fix this?" that carries the fix. A `fixer` session makes the edit in a
+  throwaway copy of the repository at the head of the change, the overlay's verification runs over it
+  there, and the thread gets the session's paragraph, the diff **git** reports, and the label that
+  verification earned — as a `suggestion` block when the edit replaces exactly the lines the remark
+  hangs on, and as a diff otherwise. Nothing is committed and nothing is pushed: the branch under
+  review moves only if a person moves it. Needs `fixer` bound in `review.models`; without it those
+  questions are answered in prose.
+- The `writer` role, used for exactly one thing: replying to a person. The answering session can read
+  the repository and gets no worktree, the reply resolves nothing and closes nothing, and every fact in
+  the published comment — run, finding key, marker — is the agent's own.
+- A status note on an issue after a run somebody woke, written by the agent from recorded facts: what
+  the check found, what the fix session did, and where the prepared change can be reviewed.
+- One decision, taken before any session starts, about whether this run may execute anything it
+  reads. A change whose head lives in this repository is the repository's own work and runs its
+  commands as before. A change from a fork is read and executed never: the command tool is not in the
+  toolkit, a session that asks for it anyway is told to record the gap instead, no fix branch and no
+  prepared patch are produced, and the report opens by saying so. A head the platform will not place
+  — because it was not asked, or would not answer — is treated as a fork, since a review that guesses
+  in the permissive direction is one an attacker can arrange by breaking a single API call.
+  `--outside` forces that posture and can only take permission away.
+- Findings that wait for a person, and approvals that release them. A major move is held from the
+  fix queue — reported, never changed — and its issue says what it waits for and what a comment there
+  will cause. The hold comes from two places that fail in opposite directions: the agent measures a
+  semantic-version major from the finding's `target` and holds it whatever the session said, and a
+  session declares the majors no comparison can see, such as a `@v5` to `@v7` action pin or a raised
+  toolchain floor. A declaration can only add a hold, never remove one, and a security remediation is
+  never held by the arithmetic. An approval is a comment from an account with write access, stamped
+  into the issue body so it is read without a model and asked for exactly once; the same run then
+  prepares, verifies, pushes and proposes the change, and says so on the issue. The stamp outlives a
+  fix that would not verify, because approval is for the move rather than for one attempt at it. A run
+  that cannot read its issues ships nothing that waits and says why.
+
+### Changed
+
+- The result file is named to a session by absolute path, and a result written elsewhere inside the
+  session's own workspace is read where it landed rather than declared missing. The first live run on a
+  six-ecosystem repository finished an analysis, wrote the file one tree deeper — a relative path
+  resolved against the session's working directory, which is not the repository root — and paid for the
+  whole task twice. The record names the salvaged path, so a habit of writing elsewhere stays visible.
+- `fetch` can take one field from every member of a collection (`select: "*.tag_name"`), and a document
+  refused for its size now says how long it is and what a member holds. A list of releases is the shape
+  a version list arrives in from a hosting platform, and without a projection the only way to read tag
+  names was to ask for the array whole: a hundred kilobytes of release notes, refused, twice, because a
+  refusal that says only "too large" leaves nothing to narrow towards.
+
+- Reads of the hosting platform's API carry the agent's own credential, on that platform's hosts and
+  nowhere else. Anonymous access there allows sixty requests an hour, which one ecosystem of one task
+  exhausted on the first live run of a repository with six: the facts a quarantine decision needed went
+  missing, the findings resting on them disappeared, and the same repository came back blocked or
+  passing depending on what the previous hour had spent. Nothing else changes hands — no session sees
+  the token, no command's environment carries it, the tool is still GET-only and still confined to the
+  allowlist, and a redirect that changes host drops the header before following. The run record says
+  whether the API was read as somebody or anonymously.
+- No hosting client in the ceiling, and the image registries in it. A task's commands get an
+  environment with no credentials, so `gh` could only ever fail while looking available; the agent's own
+  publishing never went through the ceiling. `hub.docker.com`, `registry-1.docker.io`, `auth.docker.io`
+  and `ghcr.io` are permitted, because the library now names them and a host nobody names is a host
+  nobody grants — container image facts were unobtainable while the profile called them reproducible.
+- The pinned knowledge library is `0.5.1`, contract version 2: a finding about a package names its kind
+  from a closed vocabulary, acquisition recipes no longer send a session to a command that has to log in,
+  an action's publish date comes from the platform API with the tag-without-a-release case covered, the
+  image registry hosts are named rather than described, and the contract says what an absent target
+  means — a pin with nowhere to move is reported, not fixed. `0.5.1` settles which of several true
+  words a pin's problem gets, by an ordered test on the reference rather than by judgement: two live
+  runs called one image tag `floating` and then `outdated` and filed one line of YAML as two issues.
+  It also asks a repository-wide sweep to enumerate every pin before querying anything and to record a
+  fact for each one it examined, the uninteresting ones included, which is what the closure gate above
+  reads.
+- An issue closes when the check that owns the finding reached a complete answer without it, twice in
+  a row, instead of only when that check came back completely clean. The strict reading froze the
+  tracker: while one pin in an ecosystem was outdated, no issue of that ecosystem could ever close,
+  including ones somebody had already fixed. A live maintenance run kept four issues open for exactly
+  that reason, and a weekly run of a repository that always has something outdated would keep them
+  open forever. Twice, because nobody reopens a closed issue to check it — the streak is per finding
+  and lives beside the failure streaks in the state ref, and a finding that is reported again starts
+  over. Two exceptions close on the first answer: an issue about a check that keeps failing, where a
+  completed run is the thing itself rather than an absence, and an issue somebody just wrote on, where
+  a person is reading the reply and "come back next week" is the wrong one. A review thread also
+  settles on the first answer, since the next push reopens it in front of the reader.
+- Every place the agent writes resolves a relative path against the repository it is working on, the
+  run record included, and `git worktree add` is given an absolute path regardless. It had two rules:
+  the caches followed the repository and `--run-dir` followed whoever typed the command. In CI those
+  are the same directory, so nothing ever disagreed. Run by hand from the agent's own checkout they
+  disagreed silently — git resolved the worktree path from the repository, the agent resolved it from
+  its working directory, both directories were created, and the fix went into the one nobody looks at.
+  The run then died on `git status` in a directory that was not there, after paying for every session
+  in it.
+- A finding about a package identifies itself by what is wrong — `quarantine`, `floating`, `outdated`,
+  `bundle`, `vulnerable` — instead of by a slug of its summary. The summary is prose a model writes
+  afresh every run, and the second live maintenance run proved what that costs: all four findings were
+  rephrased, every key moved, and four issues appeared beside the four already describing the same
+  problems. One of the old ones held an approval a person had given for a change that waits for one; it
+  matched nothing afterwards, and the agent asked them again. A key that moves does not just duplicate,
+  it forgets. Two kinds are still two keys, so stability did not become coarseness, and a result that
+  names no kind or an unknown one is sent back with the vocabulary. Merging two judgements of one
+  problem keeps the kind, which it did not at first: the merged finding was filed under the key it was
+  matched by and carried a different key of its own, so the run reported one problem and tracked
+  another.
+- An issue is closed only when the check examined the package it is about, not merely when the check
+  finished. The two are different answers and nothing distinguished them: a report is a list of
+  findings, and a sweep that got through part of the tree produces the same shape as one that got
+  through all of it. Two consecutive live runs over an unchanged repository examined four and then all
+  six of its action pins, both completed, and under the new closure rule two runs like the first would
+  have closed a live issue as fixed. What a run examined is read out of its evidence rather than
+  declared: `record_fact` already refuses a fact that cites no call, so the subjects of a run's
+  verified evidence are a record of what it did and cannot be inflated by a session that would rather
+  look thorough. The gate calibrates itself to the check — it applies once a check has recorded
+  anything about an ecosystem, so an ecosystem whose last pin was removed still closes its leftover
+  issue, and findings that name a file are untouched, since nobody records a fact per file. A run that
+  examined less than the last one says which subjects it missed, in the report under **Not examined
+  this run** and in `manifest.coverage`.
+- A finding about a package that names no version to move to is reported and not queued for a fix.
+  Quarantine produces one every week: the newest release is real, it is worth reporting, and there is
+  nothing to move to until the clock runs out. The first live maintenance run queued one anyway, and
+  the session did what a session asked to fix an unfixable pin does — it invented a move, downgrading
+  an action by a major version that nobody had asked to downgrade and no evidence supported.
+- The repository's checkout is watched while sessions run, instead of the agent trusting a backend's
+  sandbox to keep them out of it. A write that appears there is copied into the run record, undone, and
+  the attempt refused. On the same live fix two sessions edited the checkout through the backend's own
+  file tools, left the worktree they were given empty, and were recorded as having claimed a fix
+  without making one — two paid sessions wasted, two misleading refusals, and a developer's tree
+  modified in files nobody had asked about. Uncommitted work that predates the run is left alone.
+- A command is told where the machine's toolchains live and given a cache of its own to download into,
+  instead of a `PATH` of three directories and a home nobody ever installed anything in. The first live
+  fix failed on that and nothing else: `cargo clippy` and `cargo test` answered "no default toolchain is
+  configured", which made verification — the thing that decides whether a fix ships — impossible to pass
+  on any Rust repository regardless of the change. `RUSTUP_HOME`, `GOROOT`, `JAVA_HOME` and their kin are
+  passed through when the agent has them; downloads land in `.agent/tools` rather than in a home
+  directory, since a crate registry in somebody's home may hold their publishing token. The rest is
+  unchanged: no credential of the agent's reaches a command, and its home directory still dies with the
+  task.
+
+- A status note on a woken issue now reports what the run actually did. It asked whether the owning
+  check finished `clean`, which is the rule for *closing* an issue, so a recheck that found the
+  finding still present always answered "the check did not finish" — and never mentioned the fix it
+  had just prepared and proposed.
+
+- `--wake-comment <id>` names the comment that woke a run and is required with `--actor`. A wake with
+  no comment to read is a run guessing what it was asked. The `human-comment` trigger is now
+  `comment-on-change` and `comment-on-issue`, so the playbook comes from the event rather than from a
+  model's reading of free text.
+- A refusal to act on a comment now covers everything that can be checked before spending anything: a
+  bot, the agent's own account, an account without write access — including one the platform will not
+  answer about — a conversation with no marker, and a comment whose author is not the actor the event
+  named. Each is recorded as a declined run with its reason, because "it did not take orders from a
+  reader" is a property that has to be visible to be believed.
+- `review.models` and `maintenance.models` in the overlay now also bind `intent` and `writer`. Both are
+  required wherever a comment can wake a run, checked at startup: discovering that the answering model
+  is unbound after classifying would leave a person with silence.
+- Models and spending ceilings live in the product's overlay and nowhere else; the agent ships no
+  model name and no ceiling. The overlay is organised by kind of run — `review:` and `maintenance:`,
+  each with its own models and limits — because a product outlives any one provider and switching
+  should be one line, not a fork of the agent's configuration.
+- A review reads the overlay from the merge base, so a change cannot rewrite the rules it is judged
+  by. Where the two differ, the report says so in its first line. A base whose overlay this agent
+  cannot read is the exception, and also says so: without it, the shape of an overlay could never
+  change again, because every such change would need a run that already understood the new shape.
+- "How do I fix this?" on a fork gets a paragraph and a sentence saying why there is no change to
+  click: one could not have been verified without running the fork's code, and an unverified edit is
+  not worth offering.
+- The pinned knowledge library is `0.4.3`: it names the two roles a comment wakes, narrows a woken
+  maintenance run to the finding it was written on, says that a fix task does not always end in a
+  branch — its change may be offered to whoever asked how to fix it — records why the merge is held
+  by a required check rather than by the platform's approval flow, and states what a review of a fork
+  may and may not establish, including the workflow shapes that hand a fork's code the job's
+  credentials. It also makes a hold a field on the finding rather than a rule to remember, says that
+  an unlock stays granted across a failed attempt, and corrects the tool names it promised, which
+  until now sent sessions calling tools this agent never had.
