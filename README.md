@@ -5,6 +5,32 @@ proposed changes and maintains a repository's default branch. Judgement lives in
 [`knowledge/`](knowledge/); the runner under [`agent/`](agent/) owns everything that must be exact
 and reproducible. Each product still supplies its own overlay of values and invariants.
 
+## Successor of the split repos
+
+This repository is the **active home** of the product. It succeeds the earlier split:
+
+| Former repo | What lived there |
+| --- | --- |
+| [`amsokol/ai-devsecops-agent`](https://github.com/amsokol/ai-devsecops-agent) | runner (CLI, planner, tools, backends) |
+| [`amsokol/ai-devsecops-skills-knowledge`](https://github.com/amsokol/ai-devsecops-skills-knowledge) | judgement library (skills, playbooks, policy) |
+
+Those repos stay as history. New work, releases, and dogfood land **here**.
+
+They were separate when the library was meant to version on its own and pin into the agent. That
+split cost more than it bought:
+
+- **One product, one version.** Runner and judgement ship together; a product pins one agent tag.
+  Dual versioning forced a release order (library → agent → products), digest pins, and
+  `min_agent_version` gates that stalled cross-repo PRs whenever the halves drifted.
+- **Knowledge belongs in the wheel.** Editing prose next to the code that loads it is the normal
+  loop; a second checkout and pin file were ceremony around that loop, not a boundary customers
+  needed.
+- **One design, one CI story.** Findings from live runs almost always touch both halves. Two DESIGN
+  docs and two changelogs made the same decision look like two migrations.
+
+Older product pins on the agent and knowledge tags keep working until those products move to this
+repo's releases. There is no separate library pin anymore: knowledge ships inside the agent.
+
 | Path | Role |
 | --- | --- |
 | [`knowledge/`](knowledge/) | skills, playbooks, policy, ecosystems, `CONTRACT.md` |
