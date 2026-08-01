@@ -49,18 +49,31 @@ Products pin **one** agent tag from this repository. There is no separate knowle
 
 | | |
 | --- | --- |
-| Current | [`v0.6.1`](https://github.com/amsokol/ai-devsecops/releases/tag/v0.6.1) |
+| Current | [`v0.6.2`](https://github.com/amsokol/ai-devsecops/releases/tag/v0.6.2) |
 | Library contract | `6` (`knowledge/library.yaml` → `contract_version`) |
 | Notes | [`CHANGELOG.md`](CHANGELOG.md) |
 
 Install from the tag (CI or a product lock):
 
 ```bash
-uv pip install "ai-devsecops-agent @ git+https://github.com/amsokol/ai-devsecops.git@v0.6.1"
-# or: pip install "ai-devsecops-agent @ git+https://github.com/amsokol/ai-devsecops.git@v0.6.1"
+uv pip install "ai-devsecops-agent @ git+https://github.com/amsokol/ai-devsecops.git@v0.6.2"
+# or: pip install "ai-devsecops-agent @ git+https://github.com/amsokol/ai-devsecops.git@v0.6.2"
 ```
 
-Prefer `@v0.6.1` over `@v0.6.0` (the latter failed CI lint). Contract `6` is unbroken between them.
+Prefer `@v0.6.2` (or newer) over `@v0.6.0` / `@v0.6.1` when those tags failed CI. Contract `6`
+is unbroken across the 0.6.x line.
+
+### Before you commit
+
+GitHub Actions must stay green. Run the same checks locally (or install the hook once):
+
+```bash
+./scripts/ci-check.sh              # ruff check+format, mypy, pytest, markdownlint, library.py
+./scripts/install-git-hooks.sh     # once per clone: .git/hooks/pre-commit → ci-check
+```
+
+The pre-commit hook and the Cursor `beforeShellExecution` gate both refuse `git commit` when
+`ci-check` fails, so a red Action is not the first time you learn about format/lint.
 
 ## Knowledge library
 
@@ -669,7 +682,7 @@ finding is reported for one more week and the run says so in its warnings.
 
 ## Status
 
-Current release: [`v0.6.1`](https://github.com/amsokol/ai-devsecops/releases/tag/v0.6.1) (library
+Current release: [`v0.6.2`](https://github.com/amsokol/ai-devsecops/releases/tag/v0.6.2) (library
 contract `6`). Stage 7 is complete: a comment from a colleague wakes the agent, is read for what it
 asks for, and is answered in prose, turned into the change it asks how to make, or read as the
 approval that releases a major move the agent was holding back.

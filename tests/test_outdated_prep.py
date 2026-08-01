@@ -140,9 +140,7 @@ def test_uncleared_without_finding_fails_quarantine_gate(tmp_path: Path) -> None
 
     records = tuple(session.evidence)
     assert (
-        incomplete_current_quarantine(
-            records, (), capability=CAPABILITY, ecosystem=ECOSYSTEM
-        )
+        incomplete_current_quarantine(records, (), capability=CAPABILITY, ecosystem=ECOSYSTEM)
         is not None
     )
     finding = Finding(

@@ -28,6 +28,7 @@ what it sees, and "one run at a time" keeps two runs from racing.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -106,7 +107,7 @@ def closed_tracked(platform: Platform, *, label: str = LABEL) -> tuple[Issue, ..
     return _labelled(platform.closed_issues, label=label)
 
 
-def _labelled(fetch, *, label: str) -> tuple[Issue, ...]:
+def _labelled(fetch: Callable[..., tuple[Issue, ...]], *, label: str) -> tuple[Issue, ...]:
     names = (label, *LEGACY_LABELS) if label == LABEL else (label,)
     by_number: dict[int, Issue] = {}
     for name in names:

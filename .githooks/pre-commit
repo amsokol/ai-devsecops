@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Blocks the commit when local checks that CI runs would fail.
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+exec "$root/scripts/ci-check.sh"

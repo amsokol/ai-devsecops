@@ -562,9 +562,7 @@ def finder(intent: str = "unlock", *, fixes: bool = True) -> FakeBackend:
                 )
                 fact_key = fact["key"]
             else:
-                raise AssertionError(
-                    f"no evidence path: offered={sorted(offered)} known={known}"
-                )
+                raise AssertionError(f"no evidence path: offered={sorted(offered)} known={known}")
             brief.result_path.parent.mkdir(parents=True, exist_ok=True)
             brief.result_path.write_text(json.dumps(_reported(fact_key)), encoding="utf-8")
         elif brief.task.role is Role.FIXER:

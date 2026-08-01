@@ -665,9 +665,7 @@ def _given(job: FixJob, surfaces: Surfaces) -> tuple[str, ...]:
         f"- Suggested remediation: {finding.remediation}",
     ]
     advisories = tuple(
-        dict.fromkeys(
-            aid for item in (job.judged, *job.also) for aid in item.finding.advisory_ids
-        )
+        dict.fromkeys(aid for item in (job.judged, *job.also) for aid in item.finding.advisory_ids)
     )
     if advisories:
         lines.append(f"- Advisories: {', '.join(advisories)}")

@@ -180,9 +180,7 @@ def prepare_vuln_pack(
 def _failed(pack_path: Path, ecosystem: str, reason: str) -> PreparedVulnPack:
     return PreparedVulnPack(
         path=pack_path,
-        given=(
-            f"- Vuln prep failed for `{ecosystem}`: {reason}",
-        ),
+        given=(f"- Vuln prep failed for `{ecosystem}`: {reason}",),
         ok=False,
         hit_packages=0,
         advisory_count=0,
@@ -332,14 +330,18 @@ def _govuln_package(trace: Any, node: dict[str, Any]) -> tuple[str, str]:
         for frame in reversed(trace):
             if not isinstance(frame, dict):
                 continue
-            module = frame.get("module") if isinstance(frame.get("module"), dict) else frame
+            raw_module = frame.get("module")
+            module = raw_module if isinstance(raw_module, dict) else frame
             path = str(module.get("path") or module.get("module") or "").strip()
             version = str(module.get("version") or "").strip()
             if path and not path.startswith("stdlib"):
                 return path, version
-    module = node.get("module")
-    if isinstance(module, dict):
-        return str(module.get("path") or "").strip(), str(module.get("version") or "").strip()
+    node_module = node.get("module")
+    if isinstance(node_module, dict):
+        return (
+            str(node_module.get("path") or "").strip(),
+            str(node_module.get("version") or "").strip(),
+        )
     return "", ""
 
 
@@ -362,8 +364,10 @@ def _parse_cargo_audit(text: str) -> tuple[_Hit, ...]:
     for item in listings:
         if not isinstance(item, dict):
             continue
-        advisory = item.get("advisory") if isinstance(item.get("advisory"), dict) else {}
-        package = item.get("package") if isinstance(item.get("package"), dict) else {}
+        advisory_raw = item.get("advisory")
+        package_raw = item.get("package")
+        advisory = advisory_raw if isinstance(advisory_raw, dict) else {}
+        package = package_raw if isinstance(package_raw, dict) else {}
         name = str(package.get("name") or "").strip()
         version = str(package.get("version") or "").strip()
         advisory_id = str(advisory.get("id") or "").strip()
@@ -422,9 +426,7 @@ def _parse_npm_audit(text: str) -> tuple[_Hit, ...]:
                         else (cves[0] if cves else advisory_id)
                     ),
                     "fix_versions": (
-                        [str(entry["patched_versions"])]
-                        if entry.get("patched_versions")
-                        else []
+                        [str(entry["patched_versions"])] if entry.get("patched_versions") else []
                     ),
                     "aliases": cves,
                     "description": str(entry.get("title") or "").strip(),
@@ -437,7 +439,8 @@ def _parse_npm_audit(text: str) -> tuple[_Hit, ...]:
             if not isinstance(entry, dict):
                 continue
             package = str(name).strip()
-            via = entry.get("via") if isinstance(entry.get("via"), list) else []
+            via_raw = entry.get("via")
+            via = via_raw if isinstance(via_raw, list) else []
             version = str(entry.get("version") or "").strip()
             range_ = str(entry.get("range") or "").strip()
             if not version and range_:

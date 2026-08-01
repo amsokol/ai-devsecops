@@ -151,7 +151,7 @@ async def _execute_one(
     # attempt-2 must not pay crates.io again. On failure, leave registry tools visible.
     prep_given: tuple[str, ...] = ()
     if task.capability == OUTDATED and task.ecosystem:
-        prepared = await asyncio.to_thread(
+        outdated = await asyncio.to_thread(
             prepare_outdated_pack,
             root=toolkit._tools.files.root,
             ecosystem=task.ecosystem,
@@ -162,11 +162,11 @@ async def _execute_one(
             now=toolkit.now,
             pack_dir=tasks_dir / task.id / "prep",
         )
-        prep_given = prepared.given
-        if prepared.ok:
+        prep_given = outdated.given
+        if outdated.ok:
             toolkit.hide_registry_tools()
     elif task.capability == VULN and task.ecosystem:
-        prepared = await asyncio.to_thread(
+        vuln = await asyncio.to_thread(
             prepare_vuln_pack,
             root=toolkit._tools.files.root,
             ecosystem=task.ecosystem,
@@ -176,8 +176,8 @@ async def _execute_one(
             now=toolkit.now,
             pack_dir=tasks_dir / task.id / "prep",
         )
-        prep_given = prepared.given
-        if prepared.ok:
+        prep_given = vuln.given
+        if vuln.ok:
             toolkit.hide_scanner_tools()
     executed = Executed(task=task, outcome=_unverified(task, Reason.UNAVAILABLE))
     rejection = ""
@@ -418,14 +418,15 @@ def _parse_analysis(
     gap = incomplete_pin_sweep(root, task, tuple(evidence))
     if gap:
         raise InvalidResult(f"{path}: {gap}")
-    gap = incomplete_current_quarantine(
-        tuple(evidence),
-        result.findings,
-        capability=task.capability,
-        ecosystem=task.ecosystem,
-    )
-    if gap:
-        raise InvalidResult(f"{path}: {gap}")
+    if task.ecosystem is not None:
+        gap = incomplete_current_quarantine(
+            tuple(evidence),
+            result.findings,
+            capability=task.capability,
+            ecosystem=task.ecosystem,
+        )
+        if gap:
+            raise InvalidResult(f"{path}: {gap}")
     return result
 
 

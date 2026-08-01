@@ -115,9 +115,7 @@ def test_prepare_vuln_pack_seeds_advisories_and_hides_scanner_tools(
     assert SCANNER_TOOLS.isdisjoint(names)
 
 
-def test_clean_scan_is_successful_prep_with_no_hits(
-    tmp_path: Path, monkeypatch: Any
-) -> None:
+def test_clean_scan_is_successful_prep_with_no_hits(tmp_path: Path, monkeypatch: Any) -> None:
     session = _session(tmp_path)
     tools = session.for_task("deps-vuln@python-uv")
     _stub_run(

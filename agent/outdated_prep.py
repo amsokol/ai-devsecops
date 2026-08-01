@@ -75,7 +75,7 @@ def prepare_outdated_pack(
     for pin in registry_pins:
         if pin.package not in covered:
             continue
-        row, error = _one_pin(
+        row, pin_error = _one_pin(
             pin,
             ecosystem=ecosystem,
             capability=capability,
@@ -85,8 +85,8 @@ def prepare_outdated_pack(
             now=now,
         )
         rows.append(row)
-        if error:
-            errors.append(error)
+        if pin_error:
+            errors.append(pin_error)
         if row.get("current_cleared") is not True:
             uncleared_names.append(pin.package)
         if row.get("target"):
@@ -170,7 +170,7 @@ def _one_pin(
         )
     )
 
-    base = {
+    base: dict[str, Any] = {
         "package": pin.package,
         "current": pin.current,
         "path": pin.path,

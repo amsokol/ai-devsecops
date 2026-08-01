@@ -16,6 +16,21 @@ on everything else, fixes and additions included. Breaking means a product has t
 adopt it — the command line, the overlay shape, a required overlay key, or the library contract.
 Until 1.0 those are all still allowed to move; every time one does, it is named here.
 
+## 0.6.2 — 2026-08-01
+
+### Fixed
+
+- `ruff format` drift that failed CI after 0.6.1 (format check was not run locally before tag).
+- Mypy errors that CI never reached while Ruff failed first (`vuln_prep`, `outdated_prep`,
+  `executor`, `issues`, cancelled-fix test).
+
+### Added
+
+- [`scripts/ci-check.sh`](scripts/ci-check.sh): local mirror of both GitHub Actions jobs
+  (clears `GIT_*` so the suite still works when run from a commit hook).
+- [`.githooks/pre-commit`](.githooks/pre-commit) + [`scripts/install-git-hooks.sh`](scripts/install-git-hooks.sh).
+- Cursor [`beforeShellExecution`](.cursor/hooks.json) gate: refuse `git commit` when `ci-check` fails.
+
 ## 0.6.1 — 2026-08-01
 
 ### Fixed

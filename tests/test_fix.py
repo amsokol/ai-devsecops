@@ -14,6 +14,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from agent.backends import FakeBackend
 from agent.backends.fake import Scripted
 from agent.backends.port import Brief, Budget
@@ -479,7 +480,11 @@ def test_a_verified_fix_lands_on_its_own_branch_and_leaves_no_worktree(
 
 
 def test_a_cancelled_fix_discards_its_worktree_and_branch(
-    library: Library, overlay: Overlay, git_repo: Path, tmp_path: Path, monkeypatch
+    library: Library,
+    overlay: Overlay,
+    git_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Ctrl+C mid-fix must not leave a tip that blocks the next maintain."""
     write_pin(git_repo)

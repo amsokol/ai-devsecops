@@ -691,9 +691,7 @@ def _for_pypi(
         ]
     timed: list[_Candidate] = []
     for ver in names[:_MAX_LOOKUPS]:
-        timed.append(
-            _Candidate(version=ver, published_at=_pypi_version_published(http, name, ver))
-        )
+        timed.append(_Candidate(version=ver, published_at=_pypi_version_published(http, name, ver)))
     for ver in names[_MAX_LOOKUPS:]:
         timed.append(_Candidate(version=ver, published_at=None))
     return _from_candidates(
@@ -977,7 +975,7 @@ def _for_bsr(
     if not candidates:
         try:
             candidates = _bsr_candidates_from_plugins_catalog(http, module, current=current_ver)
-        except (ValueError, urllib.error.HTTPError, NotPermitted, HostNotPermitted):
+        except ValueError, urllib.error.HTTPError, NotPermitted, HostNotPermitted:
             candidates = []
     if not candidates:
         owner_repo = _bsr_github_repo(module)
@@ -985,7 +983,7 @@ def _for_bsr(
             return empty
         try:
             candidates = _bsr_candidates_from_github(http, owner_repo)
-        except (ValueError, urllib.error.HTTPError, NotPermitted, HostNotPermitted):
+        except ValueError, urllib.error.HTTPError, NotPermitted, HostNotPermitted:
             return empty
 
     if not candidates:
