@@ -43,6 +43,25 @@ Start with [`DESIGN.md`](DESIGN.md) — knowledge and runner in one document. Th
 [`knowledge/CONTRACT.md`](knowledge/CONTRACT.md). Release notes (runner + judgement):
 [`CHANGELOG.md`](CHANGELOG.md). One product version in [`pyproject.toml`](pyproject.toml).
 
+## Releases
+
+Products pin **one** agent tag from this repository. There is no separate knowledge artefact.
+
+| | |
+| --- | --- |
+| Current | [`v0.6.1`](https://github.com/amsokol/ai-devsecops/releases/tag/v0.6.1) |
+| Library contract | `6` (`knowledge/library.yaml` → `contract_version`) |
+| Notes | [`CHANGELOG.md`](CHANGELOG.md) |
+
+Install from the tag (CI or a product lock):
+
+```bash
+uv pip install "ai-devsecops-agent @ git+https://github.com/amsokol/ai-devsecops.git@v0.6.1"
+# or: pip install "ai-devsecops-agent @ git+https://github.com/amsokol/ai-devsecops.git@v0.6.1"
+```
+
+Prefer `@v0.6.1` over `@v0.6.0` (the latter failed CI lint). Contract `6` is unbroken between them.
+
 ## Knowledge library
 
 [`knowledge/`](knowledge/) is the agent's only source of **judgement**: what counts as a problem,
@@ -206,7 +225,9 @@ review:                            # a change came up for review; somebody is wa
     analyst: cursor/composer-2.5
 maintenance:                       # the default branch is being maintained
   models:
-    analyst: cursor/composer-2.5   # finds what has gone stale or vulnerable
+    analyst: cursor/composer-2.5   # quality / fallback for unbound optional roles
+    sweeper: cursor/composer-2.5   # optional; maintain deps-outdated (falls back to analyst)
+    vuln: cursor/composer-2.5      # optional; deps-vuln / code-vuln (falls back to analyst)
     fixer: cursor/composer-2.5     # writes the fix and proves it safe
 ```
 
@@ -483,10 +504,14 @@ to mute the agent. And a label proves nothing about authorship: anyone can apply
 is what the reconciliation trusts.
 
 Titles are built from the parts that identify a problem and none that drift — no version, no advisory
-identifier — so a saved search keeps matching while the body is updated in place. New issues per run
-are limited by the overlay (`maintenance.queue.max_new_issues_per_run`); findings over the limit are
-left for the next run and named in the record, never dropped and never merged into somebody else's
-issue.
+identifier — so a saved search keeps matching while the body is updated in place. Tracked issues and
+fix PRs use the label `ai agent` (legacy `agent` is still read so older tickets are not duplicated)
+and no longer prefix the title with `agent:`. Severity is an emoji on the title
+(🔴 / 🟠 / 🟡 / ⚪); code findings lead with `code quality` or `code vulnerability` plus a short
+summary, not the raw capability id or path. New issues per run are limited by the overlay
+(`maintenance.queue.max_new_issues_per_run`); findings over the limit are left for the next run and
+named in the record, never dropped and never merged into somebody else's issue. Returning findings
+reopen the closed agent issue with the same key instead of opening a sibling.
 
 The same run pushes what it verified and proposes it, so a weekly pass needs write access to all three:
 
@@ -644,9 +669,10 @@ finding is reported for one more week and the run says so in its warnings.
 
 ## Status
 
-Stage 7 is complete: a comment from a colleague wakes the agent, is read for what it asks for, and is
-answered in prose, turned into the change it asks how to make, or read as the approval that releases a
-major move the agent was holding back.
+Current release: [`v0.6.1`](https://github.com/amsokol/ai-devsecops/releases/tag/v0.6.1) (library
+contract `6`). Stage 7 is complete: a comment from a colleague wakes the agent, is read for what it
+asks for, and is answered in prose, turned into the change it asks how to make, or read as the
+approval that releases a major move the agent was holding back.
 
 Stage 6 before it: a review run publishes its decision on GitHub and reconciles its threads by finding
 key; a maintenance run tracks its findings as issues by the same key, pushes what it verified and
@@ -654,9 +680,19 @@ proposes it as a change request; a scheduled run holds itself back as described 
 checks keep failing, and refuses to be woken by its own comment. Under that sit the decision path, the
 tool registry, the Cursor SDK adapter, role bindings, concurrency and budgets; every analyst capability
 the library defines can run, and a run can be narrowed with `--only` (for example
-`deps-vuln@python-uv`). What is still ahead is the eval harness — the way to choose a model per role on
-evidence rather than taste. `backend: fake` remains available for CI that must exercise the pipeline
-without a model.
+`deps-vuln@python-uv`).
+
+Also shipped on the monorepo path (contracts 4–6): deterministic pin census (`list_declared_pins`) and
+a current-quarantine completeness gate; bundle-keyed findings and fixes; Variant A outdated/vuln
+prep+judge (runner acquires, model judges); `unknown_age` when publish time is null; path-finding
+`slug` with soft-dedup; tracker cosmetics (`ai agent`, severity emoji); reclaim of abandoned fix
+worktrees; local dogfood via [`DOGFOOD.md`](DOGFOOD.md).
+
+What is still ahead: the eval harness (choose a model per role on evidence rather than taste);
+outdated Variant B (runner emits routine findings without a judge session); durable publishable run
+summaries; deterministic prep for `code-vuln`. `backend: fake` remains available for CI that must
+exercise the pipeline without a model. Open operational items live in [`DESIGN.md`](DESIGN.md)
+§ Found in operation.
 
 The predecessor [`ai-devsecops-cursor`](https://github.com/amsokol/ai-devsecops-cursor) remains
 frozen at its final tag for products that have not migrated.
