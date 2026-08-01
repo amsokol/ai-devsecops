@@ -1,6 +1,6 @@
 [project]
 name = "ai-devsecops-agent"
-version = "0.6.0"
+version = "0.6.1"
 description = "Model-agnostic AI DevSecOps agent: runner and knowledge library as one release"
 requires-python = ">=3.14"
 license = "Apache-2.0"

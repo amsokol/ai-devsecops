@@ -64,7 +64,7 @@ REGISTRY_TOOLS = frozenset(
         "fetch",
     }
 )
-"""Hidden after a successful outdated prep: the pack already holds the census and cleared targets."""
+"""Hidden after successful outdated prep: pack holds the census and cleared targets."""
 
 SCANNER_TOOLS = frozenset({"run_command", "fetch"})
 """Hidden after a successful vuln prep: the pack already holds scanner advisories."""

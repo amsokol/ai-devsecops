@@ -690,7 +690,7 @@ def test_a_platform_failure_costs_the_issues_and_not_the_run(platform: FakePlatf
 def test_code_finding_soft_dedups_when_slug_drifts_but_path_and_symbol_match(
     platform: FakePlatform,
 ) -> None:
-    """#32 vs #56: same file+symbol, rephrased summary/slug → update the open issue, no duplicate."""
+    """Same file+symbol, rephrased summary/slug → update the open issue, no duplicate."""
 
     def code(*, slug: str, summary: str) -> Finding:
         return Finding(

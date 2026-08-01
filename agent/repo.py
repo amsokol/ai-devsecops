@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
 import shutil
 import subprocess
@@ -88,9 +89,8 @@ class Repository:
                 if line[len("branch ") :] == want:
                     found.append(path)
                 path = None
-            elif line == "" or line.startswith("HEAD ") or line == "detached":
-                if line == "" or line == "detached":
-                    path = None
+            elif line == "" or line == "detached":
+                path = None
         return tuple(found)
 
     def delete_branch(self, name: str) -> None:
@@ -113,10 +113,8 @@ class Repository:
             if tree.resolve() == main:
                 continue
             _git(self.path, "worktree", "remove", "--force", str(tree))
-        try:
+        with contextlib.suppress(ConfigError):
             _git(self.path, "worktree", "prune")
-        except ConfigError:
-            pass
         _git(self.path, "branch", "-D", name)
 
     @property

@@ -147,8 +147,8 @@ async def _execute_one(
     # One toolkit for the task, not per attempt: a fact established before a result was rejected is
     # still a fact, and the retry can cite it instead of paying for the call again.
     toolkit = toolkits.for_task(task, step_limit=budget.steps)
-    # Prep once before the retry loop: registry answers live on the shared evidence/memo, so attempt-2
-    # must not pay crates.io again. On failure, leave registry tools visible (degrade to today).
+    # Prep once before the retry loop: registry answers live on the shared evidence/memo, so
+    # attempt-2 must not pay crates.io again. On failure, leave registry tools visible.
     prep_given: tuple[str, ...] = ()
     if task.capability == OUTDATED and task.ecosystem:
         prepared = await asyncio.to_thread(

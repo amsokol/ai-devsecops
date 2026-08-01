@@ -719,7 +719,7 @@ def _pypi_version_names(http: HttpClient, name: str) -> list[str]:
     """Release names for a project.
 
     The full `/pypi/<name>/json` payload embeds every file for every release and can exceed the
-    HTTP body limit (ruff is multi‑MB). When that response is truncated or unusable, fall back to
+    HTTP body limit (ruff is multi-MB). When that response is truncated or unusable, fall back to
     the project releases RSS — recent enough for tip/pending, while the pin in use is dated via
     the per-version JSON endpoint.
     """
@@ -863,7 +863,9 @@ def _for_bazel(
         lookup.append(current_ver)
     dated: dict[str, _Candidate] = {}
     for ver in lookup:
-        published, heuristic = _bazel_publish_time(http, module=name, version=ver, owner_repo=owner_repo)
+        published, heuristic = _bazel_publish_time(
+            http, module=name, version=ver, owner_repo=owner_repo
+        )
         dated[ver] = _Candidate(version=ver, published_at=published, heuristic=heuristic)
     candidates: list[_Candidate] = []
     for ver in names:
@@ -1028,7 +1030,7 @@ def _bsr_owner_plugin(module: str) -> tuple[str, str] | None:
 def _bsr_candidates_from_plugins_catalog(
     http: HttpClient, module: str, *, current: str
 ) -> list[_Candidate]:
-    """Versions from `bufbuild/plugins`; publish time = catalog commit, else `source_url` Release."""
+    """Versions from `bufbuild/plugins`; time = catalog commit, else `source_url` Release."""
     owner_plugin = _bsr_owner_plugin(module)
     if owner_plugin is None:
         return []

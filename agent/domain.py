@@ -57,7 +57,9 @@ class Role(StrEnum):
     cheaper model for version sweeps bind `sweeper` without moving vuln/code work onto it.
     """
     VULN = "vuln"
-    """Advisory and code-vulnerability analysis (`deps-vuln`, `code-vuln`). Same abilities as analyst.
+    """Advisory and code-vulnerability analysis (`deps-vuln`, `code-vuln`).
+
+    Same abilities as analyst.
 
     Optional in the overlay: when unbound, the run uses the `analyst` model. Bind a stronger or
     specialised model here when one appears that is better at finding vulnerabilities, without

@@ -71,7 +71,10 @@ def plan_run(
             continue
         if rule.per_ecosystem:
             for ecosystem in ecosystems:
-                if rule.capability == DEPS_VULN and library.fact_method(ecosystem, "advisories") == "none":
+                if (
+                    rule.capability == DEPS_VULN
+                    and library.fact_method(ecosystem, "advisories") == "none"
+                ):
                     short = ecosystem.rsplit("/", 1)[-1]
                     skipped.append(
                         (

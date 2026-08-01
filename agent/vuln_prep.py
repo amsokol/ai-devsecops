@@ -145,7 +145,9 @@ def prepare_vuln_pack(
             "errors": [],
         },
     }
-    pack_path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    pack_path.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     named = ", ".join(f"`{row['package']}`" for row in rows[:NAMED])
     more = f" (+{len(rows) - NAMED} more)" if len(rows) > NAMED else ""
@@ -155,8 +157,9 @@ def prepare_vuln_pack(
         else "- Advisory hits: none (scanner completed clean)."
     )
     given = (
-        f"- Vuln prep pack (runner-acquired): `{pack_path}`. Read it with `read_file` when you need "
-        "advisory detail. Do not re-run the ecosystem scanner (`run_command` / `fetch` for the same "
+        f"- Vuln prep pack (runner-acquired): `{pack_path}`. "
+        "Read it with `read_file` when you need advisory detail. "
+        "Do not re-run the ecosystem scanner (`run_command` / `fetch` for the same "
         "crawl) — answers are already in the pack and in evidence.",
         f"- Scanner: `{_fmt(command)}` (exit {result.exit_code}).",
         hits_line,
@@ -212,12 +215,11 @@ def _command_for(root: Path, ecosystem: str) -> tuple[str, ...]:
 
 
 def _pip_compile_locks(root: Path) -> list[str]:
-    found = sorted(
+    return sorted(
         path.relative_to(root).as_posix()
         for path in root.glob("requirements*.txt")
         if path.is_file()
     )
-    return found
 
 
 def _npm_audit_command(root: Path) -> tuple[str, ...]:
@@ -414,7 +416,11 @@ def _parse_npm_audit(text: str) -> tuple[_Hit, ...]:
             key = (name, version)
             by_package.setdefault(key, []).append(
                 {
-                    "id": advisory_id if not advisory_id.isdigit() else (cves[0] if cves else advisory_id),
+                    "id": (
+                        advisory_id
+                        if not advisory_id.isdigit()
+                        else (cves[0] if cves else advisory_id)
+                    ),
                     "fix_versions": (
                         [str(entry["patched_versions"])]
                         if entry.get("patched_versions")

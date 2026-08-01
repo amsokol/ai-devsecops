@@ -163,7 +163,6 @@ command the ecosystem document names), seed `advisories` evidence, and hand the 
 When `run_command` / `fetch` are absent after that prep, judge from the pack — do not re-crawl.
 Ecosystems whose advisories are `web` or `none` keep today's path (no scanner prep).
 
-
 `action_publish_time` is required for quarantine arithmetic on github-actions tags when checking one
 known tag: pass its `published_at` into `check_quarantine`. A publish-time fact that cites a
 committer date fails the task — that clock predates the Release and falsely clears the window.

@@ -449,7 +449,9 @@ def _parse_go_mod(text: str, *, path: str) -> list[DeclaredPin]:
             block = "tool"
             continue
         if line.startswith("require "):
-            parsed = _go_require_line(line.removeprefix("require ").strip(), path=path, kind="runtime")
+            parsed = _go_require_line(
+                line.removeprefix("require ").strip(), path=path, kind="runtime"
+            )
             if parsed is not None:
                 requires[parsed.package] = parsed.current
                 if not indirect:
@@ -496,9 +498,10 @@ def _go_module_for_tool(tool: str, requires: dict[str, str]) -> tuple[str, str] 
     """Longest require module path that prefixes a tool package path."""
     best: tuple[str, str] | None = None
     for module, version in requires.items():
-        if tool == module or tool.startswith(f"{module}/"):
-            if best is None or len(module) > len(best[0]):
-                best = (module, version)
+        if (tool == module or tool.startswith(f"{module}/")) and (
+            best is None or len(module) > len(best[0])
+        ):
+            best = (module, version)
     return best
 
 

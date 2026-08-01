@@ -233,14 +233,18 @@ def test_path_finding_key_uses_slug_not_summary(tmp_path: Path) -> None:
         tmp_path / "a.json",
         {
             "outcome": "findings",
-            "findings": [base | {"summary": "On failure the client returns without a non-zero exit."}],
+            "findings": [
+                base | {"summary": "On failure the client returns without a non-zero exit."}
+            ],
         },
     )
     second = write(
         tmp_path / "b.json",
         {
             "outcome": "findings",
-            "findings": [base | {"summary": "On failure callers see success because exit is zero."}],
+            "findings": [
+                base | {"summary": "On failure callers see success because exit is zero."}
+            ],
         },
     )
     assert read(first).findings[0].key == read(second).findings[0].key

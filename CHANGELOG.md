@@ -16,6 +16,12 @@ on everything else, fixes and additions included. Breaking means a product has t
 adopt it — the command line, the overlay shape, a required overlay key, or the library contract.
 Until 1.0 those are all still allowed to move; every time one does, it is named here.
 
+## 0.6.1 — 2026-08-01
+
+### Fixed
+
+- CI: ruff (line length / SIM / RUF002) and markdownlint MD012 in `CONTRACT.md` after the 0.6.0 cut.
+
 ## 0.6.0 — 2026-08-01
 
 Breaking: library contract `6`. Code findings require a stable `slug` (key identity); soft-dedup

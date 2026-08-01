@@ -240,7 +240,10 @@ def with_kind_severity(finding: Finding) -> Finding:
     """
     if finding.kind is Kind.QUARANTINE and finding.severity.rank < Severity.HIGH.rank:
         return replace(finding, severity=Severity.HIGH)
-    if finding.kind in {Kind.FLOATING, Kind.UNKNOWN_AGE} and finding.severity.rank < Severity.MEDIUM.rank:
+    if (
+        finding.kind in {Kind.FLOATING, Kind.UNKNOWN_AGE}
+        and finding.severity.rank < Severity.MEDIUM.rank
+    ):
         return replace(finding, severity=Severity.MEDIUM)
     return finding
 

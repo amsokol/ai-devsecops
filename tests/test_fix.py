@@ -8,6 +8,7 @@ maintenance is never touched, and a refusal is recorded rather than swallowed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import subprocess
 from datetime import UTC, datetime
@@ -524,10 +525,8 @@ def test_a_cancelled_fix_discards_its_worktree_and_branch(
             run="run-cancel",
         )
 
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         asyncio.run(run())
-    except asyncio.CancelledError:
-        pass
     assert branch not in branches(git_repo)
     assert not (tmp_path / "fixes" / task_id).exists()
     assert not repository.has_branch(branch)

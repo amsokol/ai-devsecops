@@ -227,7 +227,9 @@ def _track(
                         Posted("updated", key, f"same path+symbol as `{old_key}`; key migrated")
                     )
                 else:
-                    record.posted.append(Posted("unchanged", key, f"same path+symbol as `{old_key}`"))
+                    record.posted.append(
+                        Posted("unchanged", key, f"same path+symbol as `{old_key}`")
+                    )
                 record.numbers[key] = issue.number
                 absorbed.add(old_key)
                 absences.reported(key, finding)

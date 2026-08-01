@@ -71,7 +71,9 @@ def incomplete_current_quarantine(
     )
 
 
-def _pins(records: Iterable[Evidence], *, ecosystem: str, value: bool | None) -> set[tuple[str, str]]:
+def _pins(
+    records: Iterable[Evidence], *, ecosystem: str, value: bool | None
+) -> set[tuple[str, str]]:
     out: set[tuple[str, str]] = set()
     for record in records:
         if not record.is_verified:

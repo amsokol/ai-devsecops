@@ -105,7 +105,9 @@ def prepare_outdated_pack(
             "errors": errors,
         },
     }
-    pack_path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    pack_path.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     named = ", ".join(f"`{name}`" for name in uncleared_names[:NAMED])
     more = f" (+{len(uncleared_names) - NAMED} more)" if len(uncleared_names) > NAMED else ""
@@ -207,7 +209,7 @@ def _one_pin(
                     run_command=run_command,
                 )
             except (HostNotPermitted, OSError, ValueError, urllib.error.HTTPError) as error:
-                # Fail-closed: null current_cleared trips the quarantine gate until a finding exists.
+                # Fail-closed: null current_cleared trips the gate until a finding exists.
                 gap = session.evidence.add(
                     Evidence.verified(
                         question=Question.CURRENT_CLEARED,
