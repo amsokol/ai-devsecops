@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.domain import FixOutcome
+from agent.issues import LABEL
 from agent.reconcile import Posted
 from agent.remediate import Fix
 from agent.scm import marker
@@ -82,6 +83,7 @@ def propose_fixes(
                     base=base,
                     title=_title(fix),
                     body=_body(fix, issues=issues, run=run),
+                    labels=(LABEL,),
                 )
             )
         except ScmError as error:
@@ -104,7 +106,7 @@ def _title(fix: Fix) -> str:
     what = subject.package or subject.path or finding.capability.rsplit("/", 1)[-1]
     count = len(fix.job.group)
     tail = f" ({count} findings)" if count > 1 else ""
-    return f"agent: {finding.klass.value} fix for {what}{tail}"
+    return f"{finding.klass.value} fix for {what}{tail}"
 
 
 def _body(fix: Fix, *, issues: Mapping[str, int], run: str) -> str:

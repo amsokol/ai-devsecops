@@ -52,15 +52,18 @@ RESULT_SHAPE = """\
       "subject": {"package": "...", "version": "..."},
       "location": {"path": "path/to/file", "line": 42},
       "summary": "one sentence, addressed to the author",
+      "slug": "stable-kebab-id for a path finding — not derived from summary",
       "rationale": "why it matters here, referring to the evidence",
       "evidence": ["<evidence key returned by a tool>"],
       "remediation": "what to do, when known",
       "advisory": "advisory identifier, for dependency findings",
       "symbol": "enclosing function or type, for code findings",
       "forbidden_state": false,
-      "kind": "quarantine | floating | outdated | bundle | vulnerable, for a package",
+      "kind": "quarantine | unknown_age | floating | outdated | bundle | vulnerable, for a package",
       "target": "the version the remediation moves to, for a version move",
-      "needs_unlock": false
+      "needs_unlock": false,
+      "bundle": "coupled-bundle id from the comment pass, when this pin is a member",
+      "via": "direct pin → … → subject, when the vulnerable package is transitive"
     }
   ]
 }
@@ -75,14 +78,21 @@ Rules the validator enforces:
 * `subject` names a `package` or a `path`, never both, and its ecosystem is this task's, so it is
   not given. The file a package was found in belongs in `location`. Fields you do not need are
   omitted, not left empty.
-* one finding per problem. Four advisories against one pin are four findings, each with its own
-  `advisory`; the report groups them, and a human answering one of them does not silence the rest.
+* one finding per problem. Four advisories against one pin are four findings in the result file,
+  each with its own `advisory`; the agent merges them under one key before publish, so the tracker
+  and the fix branch see one conversation for the pin.
 * every entry in `evidence` must be a key a tool returned in this run.
 * `kind` is required for a finding about a package, and it is what the problem is *called*, not how
-  you worded it: `quarantine` for a version inside the window, `floating` for a reference that is
-  not a concrete version, `outdated` for a newer cleared release, `bundle` for members that
-  disagree, `vulnerable` for an advisory. The finding's identity is built from it, so the same
-  problem next week must arrive under the same word or it becomes a second issue beside the first.
+  you worded it: `quarantine` when the version in use is inside the window (`current_cleared` is
+  false), `unknown_age` when publication time could not be established (`current_cleared` is null —
+  say so in the summary; never call that quarantine), `floating` for a reference that is not a
+  concrete version, `outdated` for a newer cleared release, `bundle` for members that disagree,
+  `vulnerable` for an advisory. For `vulnerable`, the finding's identity is the kind —
+  not the advisory id — so every advisory on one pin stays one issue.
+* `slug` is required for a finding about a **path** (code-quality / code-vuln). It is a stable
+  kebab-case identity for the problem (`echo-rpc-nonzero-exit`), and the finding key is built from
+  it — **not** from `summary`. Rephrasing the summary must not change the slug. When an open agent
+  issue already covers the same path and symbol, reuse that issue's slug.
 * `target` is the version the remediation moves to. Give it whenever there is one: the agent
   measures the size of the move itself, and a move it cannot measure is one it cannot hold back.
   When there is nowhere to move yet — the newest release is still inside quarantine — leave it out
@@ -92,6 +102,14 @@ Rules the validator enforces:
   defines that. Set it for the majors no comparison can see — a floating action pin, a raised
   toolchain or language floor, a runtime image tag. A plain semantic-version major needs no flag:
   give `target` and the agent works it out. The flag only ever adds a hold; it cannot remove one.
+* `bundle` is the id from `agent: bundle <id>` (or an inferred couple you named in NOTES). Set it on
+  every member finding of that couple — including routine outdated and quarantine — so the agent
+  can collapse them into one issue. Omit it when the pin is independent.
+* `via` is required when `kind` is `vulnerable` and the subject is not a direct declared pin: the
+  chain from a direct pin the product owns to the vulnerable package (e.g. `httpx → h11`). Omit it
+  when the subject itself is declared. The issue shows this as "Brought in by".
+* For `deps-outdated`, severity floors: `floating` → `medium`, `quarantine` → `high` (the runner
+  raises under-graded values). `outdated` stays `low` unless the gap is large.
 * no other fields are allowed anywhere in the file."""
 
 
@@ -176,6 +194,9 @@ def quoted(text: str, *, limit: int) -> tuple[str, ...]:
 
 def role_instructions(role: Role) -> str:
     path = PROMPTS_DIR / f"{role.value}.md"
+    if not path.is_file() and role in {Role.SWEEPER, Role.VULN}:
+        # Same procedure as analyst; the role exists so products can bind a different model.
+        path = PROMPTS_DIR / f"{Role.ANALYST.value}.md"
     if not path.is_file():
         raise ConfigError(f"no instructions for role {role.value!r} at {path}")
     return path.read_text(encoding="utf-8").strip()

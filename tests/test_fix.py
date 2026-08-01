@@ -21,7 +21,7 @@ from agent.budget import Ledger, RunBudget
 from agent.cli import main
 from agent.domain import FixOutcome, PlannedTask, Role, Trigger
 from agent.evidence import Reliability, Subject
-from agent.findings import Action, Finding, Klass, Location, Severity
+from agent.findings import Action, Finding, Kind, Klass, Location, Severity
 from agent.library import Library
 from agent.manifest import Manifest
 from agent.orchestrator import _account
@@ -106,6 +106,8 @@ def judged(
         remediation=remediation,
         location=Location(path="pyproject.toml", line=12),
         advisory=advisory or f"PYSEC-{package}",
+        advisories=(advisory or f"PYSEC-{package}",),
+        kind=Kind.VULNERABLE,
         target=target,
     )
     return Judged(
@@ -475,6 +477,62 @@ def test_a_verified_fix_lands_on_its_own_branch_and_leaves_no_worktree(
     assert "run-test" in message
 
 
+def test_a_cancelled_fix_discards_its_worktree_and_branch(
+    library: Library, overlay: Overlay, git_repo: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """Ctrl+C mid-fix must not leave a tip that blocks the next maintain."""
+    write_pin(git_repo)
+    item = judged()
+    branch = branch_for(item)
+
+    async def cancelled(*_args: object, **_kwargs: object) -> Fix:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr("agent.remediate._one", cancelled)
+    repository = Repository.open(git_repo)
+    queue = plan_fixes(
+        (item,),
+        library=library,
+        overlay=overlay,
+        playbook="playbooks/maintain",
+        repository=repository,
+        max_open_fix_requests=5,
+    )
+    assert len(queue.jobs) == 1
+    task_id = queue.jobs[0].task.id
+    session = Session(
+        repository=repository.path,
+        grants=Grants(binaries=frozenset({"uv"}), hosts=frozenset()),
+        cache=FactCache(tmp_path / "cache", writable=False),
+        scratch_root=tmp_path / "scratch",
+    )
+    toolkits = Toolkits(session=session, now=datetime.now(UTC), quarantine_days=7)
+
+    async def run() -> None:
+        await apply(
+            queue,
+            repository=repository,
+            roster=Roster.of(fixer()),
+            library=library,
+            notes="",
+            surfaces=SURFACES,
+            trees_dir=tmp_path / "fixes",
+            tasks_dir=tmp_path / "tasks",
+            budget=Budget(seconds=30, steps=20),
+            toolkits=toolkits,
+            ledger=Ledger(RunBudget(max_parallel=2, tokens=1_000_000)),
+            run="run-cancel",
+        )
+
+    try:
+        asyncio.run(run())
+    except asyncio.CancelledError:
+        pass
+    assert branch not in branches(git_repo)
+    assert not (tmp_path / "fixes" / task_id).exists()
+    assert not repository.has_branch(branch)
+
+
 def test_a_fix_nobody_verified_does_not_ship(
     library: Library, overlay: Overlay, git_repo: Path, tmp_path: Path
 ) -> None:
@@ -794,5 +852,5 @@ def test_a_dry_run_says_what_it_would_fix_and_creates_nothing(
     manifest = json.loads(next(run_dir.glob("*/manifest.json")).read_text(encoding="utf-8"))
     assert manifest["fixes"] == []
     assert manifest["remediation"] == {}
-    assert [role["role"] for role in manifest["roles"]] == ["analyst"]
+    assert [role["role"] for role in manifest["roles"]] == ["analyst", "sweeper", "vuln"]
     assert not any(name.startswith("agent/") for name in branches(git_repo))

@@ -65,7 +65,7 @@ def test_unknown_ecosystem_lists_what_is_available(
     overlay_root: Path, library: Library, config: Config
 ) -> None:
     written(overlay_root, "ecosystems: [ecosystems/rust]\nquarantine: {days: 7}\n")
-    with pytest.raises(ConfigError, match="available: ecosystems/github-actions"):
+    with pytest.raises(ConfigError, match="available: ecosystems/bazel"):
         load(overlay_root, library, config)
 
 

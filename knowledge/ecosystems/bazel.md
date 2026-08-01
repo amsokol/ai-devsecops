@@ -14,25 +14,26 @@ applies_to: [MODULE.bazel, MODULE.bazel.lock]
 | declared pins | `tool` | `MODULE.bazel` and its includes | reproducible |
 | available versions | `api` | Bazel Central Registry module metadata | reproducible |
 | yanked versions | `api` | the same metadata | reproducible |
-| publish time | `web` | the upstream project's release for that version | heuristic |
+| publish time | `api` / `web` | BCR commit that added the version's `source.json`; else upstream GitHub Release | reproducible (BCR) / heuristic (Release) |
 | advisories | `none` | — | — |
 
 There is no audit tool for modules, so advisories here are a documented gap: report them as
 unverified and review release notes for high-impact rules and toolchains instead of inventing
 findings ([`../policy/unknowns.md`](../policy/unknowns.md)).
 
-The registry does not publish upload timestamps, which would leave every module permanently inside
-quarantine and make this ecosystem's dependency work decorative. Instead, derive the publication time
-from the upstream project's release for that exact version — most registry modules are published from
-a tagged release. Because that timestamp is heuristic, it is used asymmetrically:
+Publication time for a module version is the date it entered BCR: the commit on
+`bazelbuild/bazel-central-registry` that added `modules/<name>/<version>/source.json`. That is the
+source of truth for quarantine age. When that commit cannot be resolved, fall back to the upstream
+project's GitHub Release for the same version (BCR `repository` often looks like
+`github:owner/name`). The fallback is heuristic and is used asymmetrically:
 
 - it may keep a candidate waiting;
 - it may clear a candidate only when the version is **unambiguously** older than the window, not
   borderline. When the derived age is close to the boundary, wait for the next run rather than trusting
   a date that came from a different system.
 
-The overlay may name a better source, and when it does, prefer it. Never invent a timestamp, and never
-treat "the version exists in the registry" as evidence of when it appeared.
+Never invent a timestamp, and never treat "the version exists in the registry" as evidence of when it
+appeared.
 
 Do not describe this ecosystem as having no scanner for **versions**: the registry metadata is a
 reliable version source.
@@ -57,10 +58,16 @@ for it, so a command line that expects a login has nothing to log in with.
 
 ## Evidence recipes
 
+**Declared pins.** Call `list_declared_pins` with `ecosystem=ecosystems/bazel` first on every
+repository-wide outdated sweep. It extracts `bazel_dep(name=…, version=…)` from `MODULE.bazel` and
+`include("//:…")` files. Record a fact for every package in its `packages` list — including pins
+that are fine — before querying BCR. The agent fails the task when the census is not covered.
+Macros that emit `bazel_dep` dynamically are not visible to this census.
+
 **Candidates / Moves to.** For each `bazel_dep` pin, call `cleared_pin_target` with
 `ecosystem=ecosystems/bazel`, `package=<module name>`, and `current` as the pinned version. Use its
 `target` as `Moves to` when set; put `pending` tips under Pending quarantine. Do **not** invent the
-concrete version from a narrow BCR or GitHub fetch or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target. Yanked BCR versions never appear as
+concrete version from a narrow BCR or GitHub fetch or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target. When `current_cleared` is `false`, emit `kind: quarantine` with `forbidden_state` (cite `evidence_key`); when it is `null`, emit `kind: unknown_age` with `forbidden_state` — say the release date is unknown, never quarantine. Do not leave the pin silent. Yanked BCR versions never appear as
 `target`.
 
 `bazel mod deps` and `bazel mod graph` describe the resolved graph locally; they do not choose
@@ -68,9 +75,8 @@ concrete version from a narrow BCR or GitHub fetch or by eye. After the tool ans
 
 Routine only: security `needs_unlock` for a young fixed advisory version is unchanged.
 
-**Publish time.** Prefer `cleared_pin_target` (BCR metadata + upstream GitHub Release when the module
-points at a repository; dates are heuristic). An absent or ambiguous upstream tag means unverified —
-wait.
+**Publish time.** Prefer `cleared_pin_target` (BCR versions + BCR `source.json` commit date; GitHub
+Release only when BCR has no date). An absent date means unverified — wait.
 
 ## Update procedure
 

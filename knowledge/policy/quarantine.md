@@ -26,8 +26,9 @@ a publication timestamp and **N**, the tool answers whether the version has clea
 clear, and how to phrase the pending line. Hand-rolled `published + N` is not acceptable: it is
 unreproducible and it silently disagrees with itself across a run.
 
-When the publication timestamp is unverified, treat the candidate as **not cleared**. Waiting is
-always the safe direction.
+When the publication timestamp is unverified, treat a *candidate* as **not cleared** for Moves to —
+waiting is always the safe direction. For the version **already pinned**, do not pretend it is in
+quarantine: emit `kind: unknown_age` so the issue says the release date is unknown.
 
 ## Heuristic timestamps
 
@@ -56,11 +57,18 @@ For a version you might bump **to**:
 ## Versions already pinned in the tree
 
 A currently pinned version that is younger than **N** is a forbidden state
-([`verdicts.md`](verdicts.md)), not a routine finding.
+([`verdicts.md`](verdicts.md)), not ordinary drift awaiting a bump.
+
+`cleared_pin_target` answers `current_cleared` for the pin in use (or the tip a float resolves to).
+When that value is `false`, maintenance and review must emit `kind: quarantine` with
+`forbidden_state` under the contract kind order. When it is `null`, emit `kind: unknown_age` with
+`forbidden_state` — title and summary must say the release date is unknown; never file that as
+quarantine. The runner fails the outdated task if the finding is omitted — the same class of gate
+as an incomplete pin census.
 
 During maintenance: open or update an issue for it, report the forbidden state, and do not
 "fix" it by adopting an even newer version that is also inside the window. Prefer waiting, or a
-documented security exception, or an older version that has already cleared.
+documented security exception, or an older version that has already cleared (`target` from the tool).
 
 During review of a change: introducing or keeping such a pin in the change is a blocking
 finding.

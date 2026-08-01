@@ -16,19 +16,25 @@ from agent.backends.port import Brief, Budget, Failure, SessionResult
 from agent.backends.select import Roster
 from agent.brief import compose, digest, knowledge_for, role_instructions
 from agent.budget import Ledger, RunBudget
-from agent.census import incomplete_action_sweep
+from agent.census import incomplete_pin_sweep
 from agent.containment import Checkout, Stray, refusal
 from agent.domain import Outcome, Plan, PlannedTask, Reason, Role
 from agent.evidence import EvidenceStore
 from agent.findings import Finding
 from agent.library import Library
+from agent.outdated_prep import prepare_outdated_pack
+from agent.quarantine_gate import incomplete_current_quarantine
 from agent.results import InvalidResult, TaskResult, read_result
 from agent.toolkit import Toolkit, Toolkits
 from agent.verdict import TaskOutcome
+from agent.vuln_prep import prepare_vuln_pack
 
 MAX_ATTEMPTS = 2
 """One retry, as the contract requires. A second would spend budget on a model that has already
 shown it cannot produce a valid result, and delay the honest `unverified` that follows."""
+
+OUTDATED = "capabilities/deps-outdated"
+VULN = "capabilities/deps-vuln"
 
 
 @dataclass(slots=True)
@@ -141,6 +147,38 @@ async def _execute_one(
     # One toolkit for the task, not per attempt: a fact established before a result was rejected is
     # still a fact, and the retry can cite it instead of paying for the call again.
     toolkit = toolkits.for_task(task, step_limit=budget.steps)
+    # Prep once before the retry loop: registry answers live on the shared evidence/memo, so attempt-2
+    # must not pay crates.io again. On failure, leave registry tools visible (degrade to today).
+    prep_given: tuple[str, ...] = ()
+    if task.capability == OUTDATED and task.ecosystem:
+        prepared = await asyncio.to_thread(
+            prepare_outdated_pack,
+            root=toolkit._tools.files.root,
+            ecosystem=task.ecosystem,
+            capability=task.capability,
+            session=toolkit._session,
+            tools=toolkit._tools,
+            quarantine_days=toolkit.quarantine_days,
+            now=toolkit.now,
+            pack_dir=tasks_dir / task.id / "prep",
+        )
+        prep_given = prepared.given
+        if prepared.ok:
+            toolkit.hide_registry_tools()
+    elif task.capability == VULN and task.ecosystem:
+        prepared = await asyncio.to_thread(
+            prepare_vuln_pack,
+            root=toolkit._tools.files.root,
+            ecosystem=task.ecosystem,
+            capability=task.capability,
+            session=toolkit._session,
+            tools=toolkit._tools,
+            now=toolkit.now,
+            pack_dir=tasks_dir / task.id / "prep",
+        )
+        prep_given = prepared.given
+        if prepared.ok:
+            toolkit.hide_scanner_tools()
     executed = Executed(task=task, outcome=_unverified(task, Reason.UNAVAILABLE))
     rejection = ""
     try:
@@ -157,6 +195,7 @@ async def _execute_one(
             toolkit=toolkit,
             rejection=rejection,
             checkout=checkout,
+            given=toolkit.caveats + prep_given,
         )
     finally:
         # Recorded whatever happened, including for a task that failed: how a fact was obtained is
@@ -310,6 +349,7 @@ async def _attempts(
     toolkit: Toolkit,
     rejection: str,
     checkout: Checkout | None = None,
+    given: tuple[str, ...] = (),
 ) -> Executed:
     def prompt_for(number: int, refused: str, result_path: Path) -> str:
         return compose(
@@ -321,7 +361,7 @@ async def _attempts(
             tools=tuple((tool.name, tool.description) for tool in toolkit.tools()),
             attempt=number,
             invalid_reason=refused or rejection,
-            given=toolkit.caveats,
+            given=given,
         )
 
     attempted = await run_attempts(
@@ -331,7 +371,7 @@ async def _attempts(
         budget=budget,
         toolkit=toolkit,
         prompt_for=prompt_for,
-        parse=lambda path: _parse_outdated(
+        parse=lambda path: _parse_analysis(
             path,
             task=task,
             evidence=evidence,
@@ -356,21 +396,34 @@ async def _attempts(
     return executed
 
 
-def _parse_outdated(
+def _parse_analysis(
     path: Path,
     *,
     task: PlannedTask,
     evidence: EvidenceStore,
     root: Path,
 ) -> TaskResult:
-    """Parse the result file, then refuse a github-actions sweep that skipped census pins."""
+    """Parse the result file; apply deps-outdated completeness gates only when this task owns them.
+
+    Evidence is run-global. Census and current-quarantine obligations are owned by
+    `deps-outdated@<ecosystem>` — the same ownership both gates enforce. Other capabilities only
+    need a valid result file.
+    """
     result = read_result(
         path,
         capability=task.capability,
         known_evidence=evidence.keys(),
         ecosystem=task.ecosystem,
     )
-    gap = incomplete_action_sweep(root, task, tuple(evidence))
+    gap = incomplete_pin_sweep(root, task, tuple(evidence))
+    if gap:
+        raise InvalidResult(f"{path}: {gap}")
+    gap = incomplete_current_quarantine(
+        tuple(evidence),
+        result.findings,
+        capability=task.capability,
+        ecosystem=task.ecosystem,
+    )
     if gap:
         raise InvalidResult(f"{path}: {gap}")
     return result

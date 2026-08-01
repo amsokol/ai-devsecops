@@ -10,13 +10,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from agent.config import Scenario, TaskRule, When
-from agent.domain import Plan, PlannedTask, Trigger
+from agent.domain import Plan, PlannedTask, Role, Trigger
 from agent.library import Library
 from agent.overlay import Overlay
 
 WORKFLOW_MARKERS = (".github/workflows/", ".github/actions/")
 NON_SOURCE_SUFFIXES = frozenset({".md", ".txt", ".rst", ".adoc", ".png", ".jpg", ".svg"})
 NON_SOURCE_NAMES = frozenset({"LICENSE", "NOTICE", "CODEOWNERS", ".gitignore"})
+DEPS_VULN = "capabilities/deps-vuln"
+# Mechanical outdated sweeps need pin arithmetic and kind order, not maintain playbook prose
+# (issues, unlock, reconcile) or verification/holds/unknowns. Those policies are paid on every
+# turn of a multi-tool session; dropping them is the main context-tax cut for `sweeper`.
+SWEEPER_POLICIES = frozenset(
+    {
+        "policy/quarantine",
+        "policy/verdicts",
+        "policy/bundles",
+        "policy/grouping",
+        "evidence/acquisition",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,10 +70,25 @@ def plan_run(
             skipped.append((rule.capability, reason))
             continue
         if rule.per_ecosystem:
-            tasks.extend(
-                _task(rule, scenario, library, ecosystem=ecosystem, scope=scope.get(ecosystem, ()))
-                for ecosystem in ecosystems
-            )
+            for ecosystem in ecosystems:
+                if rule.capability == DEPS_VULN and library.fact_method(ecosystem, "advisories") == "none":
+                    short = ecosystem.rsplit("/", 1)[-1]
+                    skipped.append(
+                        (
+                            f"{rule.capability}@{short}",
+                            "advisories are a documented gap (method none) — no session",
+                        )
+                    )
+                    continue
+                tasks.append(
+                    _task(
+                        rule,
+                        scenario,
+                        library,
+                        ecosystem=ecosystem,
+                        scope=scope.get(ecosystem, ()),
+                    )
+                )
         else:
             tasks.append(_task(rule, scenario, library, ecosystem=None, scope=scope.get(None, ())))
     return Plan(
@@ -77,9 +105,7 @@ def _task(
     scope: tuple[str, ...],
 ) -> PlannedTask:
     short = rule.capability.rsplit("/", 1)[-1]
-    roots: tuple[str, ...] = (scenario.playbook, rule.capability)
     if ecosystem is not None:
-        roots += (ecosystem,)
         short = f"{short}@{ecosystem.rsplit('/', 1)[-1]}"
     return PlannedTask(
         id=short,
@@ -88,8 +114,39 @@ def _task(
         required=rule.required,
         ecosystem=ecosystem,
         scope=scope,
-        knowledge=library.closure(roots),
+        knowledge=_knowledge(rule, scenario, library, ecosystem=ecosystem),
     )
+
+
+def _knowledge(
+    rule: TaskRule,
+    scenario: Scenario,
+    library: Library,
+    *,
+    ecosystem: str | None,
+) -> tuple[str, ...]:
+    """Which library documents this task's prompt embeds.
+
+    Analyst/fixer/writer keep the playbook closure. Sweeper drops the maintain playbook and keeps
+    only policies needed for census, quarantine, bundles and kind order — shared evidence already
+    spans the run; repeating unlock/verification prose in every outdated session does not.
+    """
+    if rule.role is Role.SWEEPER:
+        roots: tuple[str, ...] = (rule.capability,)
+        if ecosystem is not None:
+            roots += (ecosystem,)
+        closed = library.closure(roots)
+        return tuple(
+            identifier
+            for identifier in closed
+            if identifier == rule.capability
+            or identifier == ecosystem
+            or identifier in SWEEPER_POLICIES
+        )
+    roots = (scenario.playbook, rule.capability)
+    if ecosystem is not None:
+        roots += (ecosystem,)
+    return library.closure(roots)
 
 
 def _resolve(

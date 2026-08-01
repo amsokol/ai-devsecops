@@ -17,7 +17,7 @@ from typing import Any
 
 from agent.domain import AnswerOutcome, FixOutcome, Intent, Outcome, Reason
 from agent.evidence import Subject
-from agent.findings import Finding, Kind, Klass, Location, Severity
+from agent.findings import Finding, Kind, Klass, Location, Severity, slug
 
 # Reasons a subagent may state. The others describe what the agent itself concluded, and a task
 # claiming one of those would be describing a decision it does not make.
@@ -41,10 +41,13 @@ _FINDING_KEYS = frozenset(
         "remediation",
         "advisory",
         "symbol",
+        "slug",
         "forbidden_state",
         "target",
         "needs_unlock",
         "kind",
+        "bundle",
+        "via",
     }
 )
 _SUBJECT_KEYS = frozenset({"ecosystem", "package", "version", "path"})
@@ -271,6 +274,8 @@ def _finding(
             f"{where}: evidence {', '.join(unknown_records)} was never recorded by this run"
         )
     subject = _subject(raw.get("subject"), where=where, ecosystem=ecosystem)
+    advisory = str(raw.get("advisory") or "").strip()
+    code_slug = _code_slug_field(raw.get("slug"), where=where, path_finding=bool(subject.path))
     return Finding(
         capability=str(raw.get("capability") or capability),
         klass=_enum(Klass, raw.get("class"), path=path, field_name=f"{where} class"),
@@ -281,13 +286,34 @@ def _finding(
         evidence=evidence,
         remediation=str(raw.get("remediation") or "").strip(),
         location=_location(raw.get("location"), where=where),
-        advisory=str(raw.get("advisory") or "").strip(),
+        advisory=advisory,
+        advisories=(advisory,) if advisory else (),
         symbol=str(raw.get("symbol") or "").strip(),
+        slug=code_slug,
         forbidden_state=bool(raw.get("forbidden_state", False)),
         target=str(raw.get("target") or "").strip(),
         needs_unlock=bool(raw.get("needs_unlock", False)),
         kind=_kind(raw.get("kind"), where=where, path=path, packaged=bool(subject.package)),
+        bundle=str(raw.get("bundle") or "").strip(),
+        via=str(raw.get("via") or "").strip(),
     )
+
+
+def _code_slug_field(raw: Any, *, where: str, path_finding: bool) -> str:
+    """Stable identity for a code finding. Required when the subject is a path."""
+    named = str(raw or "").strip()
+    if not named:
+        if not path_finding:
+            return ""
+        raise InvalidResult(
+            f"{where}: a finding about a path must name a stable `slug` (kebab-case identity). "
+            "The key is built from it, not from the summary — rephrasing the summary must not open "
+            "a second issue"
+        )
+    normalized = slug(named)
+    if not normalized:
+        raise InvalidResult(f"{where}: slug {named!r} is empty after normalisation")
+    return normalized
 
 
 def _kind(raw: Any, *, where: str, path: Path, packaged: bool) -> Kind | None:

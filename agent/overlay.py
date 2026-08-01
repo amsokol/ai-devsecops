@@ -43,7 +43,9 @@ _TOP_LEVEL_KEYS = frozenset(
     }
 )
 _SETTINGS_KEYS = frozenset({"models", "limits"})
-_LIMIT_KEYS = frozenset({"tokens_per_run", "minutes_per_task", "tasks_at_once"})
+_LIMIT_KEYS = frozenset(
+    {"tokens_per_run", "minutes_per_task", "tasks_at_once", "fixer_token_reserve"}
+)
 _QUEUE_KEYS = frozenset({"max_new_issues_per_run", "max_open_fix_requests"})
 _UNANSWERED = (
     "is required: what a run may spend and how much it may leave behind are the product's "
@@ -79,11 +81,16 @@ class Limits:
 
     Removed has to be written as `null`, because a missing key is a question nobody answered, and
     reading it as "no limit" would make the most expensive setting in the file the one nobody typed.
+
+    `fixer_token_reserve` is the exception: absent or `null` means no slice is held back (today's
+    behaviour). A positive integer keeps that many tokens for fix sessions so analysts cannot burn
+    the whole ceiling before any fix starts.
     """
 
     tokens_per_run: int | None
     minutes_per_task: int
     tasks_at_once: int
+    fixer_token_reserve: int | None = None
 
     @property
     def seconds_per_task(self) -> int:
@@ -322,6 +329,18 @@ class _Reader:
             self.fail(f"must be a positive integer, or null for no ceiling, got {value!r}", key)
         return int(value)
 
+    def optional_count(self, key: str) -> int | None:
+        """A positive integer when written; absent or `null` means the feature is off.
+
+        Unlike `ceiling`, omitting this key is allowed: the default is "no reserve", not "no limit".
+        """
+        if key not in self.raw or self.raw[key] is None:
+            return None
+        value = self.raw[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            self.fail(f"must be a positive integer, or null/omitted for none, got {value!r}", key)
+        return int(value)
+
     def strings(self, key: str) -> tuple[str, ...]:
         value = self.raw.get(key)
         if value is None:
@@ -440,10 +459,20 @@ def _read_limits(reader: _Reader, named: str) -> Limits:
     if unknown:
         known = ", ".join(sorted(_LIMIT_KEYS))
         inner.fail(f"unknown key(s) {', '.join(unknown)}; known keys are {known}")
+    tokens = inner.ceiling("tokens_per_run")
+    reserve = inner.optional_count("fixer_token_reserve")
+    if reserve is not None and tokens is not None and reserve >= tokens:
+        inner.fail(
+            f"fixer_token_reserve ({reserve}) must be less than tokens_per_run ({tokens}): a "
+            "reserve that leaves no room for analysis means every analysis task is exhausted "
+            "before it starts",
+            "fixer_token_reserve",
+        )
     return Limits(
-        tokens_per_run=inner.ceiling("tokens_per_run"),
+        tokens_per_run=tokens,
         minutes_per_task=inner.count("minutes_per_task"),
         tasks_at_once=inner.count("tasks_at_once"),
+        fixer_token_reserve=reserve,
     )
 
 

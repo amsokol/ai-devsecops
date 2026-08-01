@@ -44,15 +44,19 @@ class Ability(StrEnum):
 NEEDS: dict[Role, frozenset[Ability]] = {
     Role.INTENT: frozenset(),
     Role.ANALYST: frozenset({Ability.TOOLS}),
+    Role.SWEEPER: frozenset({Ability.TOOLS}),
+    Role.VULN: frozenset({Ability.TOOLS}),
     Role.FIXER: frozenset({Ability.TOOLS}),
     Role.WRITER: frozenset(),
 }
 """What a role cannot work without.
 
 `intent` and `writer` need nothing special: one classifies a short text, the other formulates one,
-and both answer in a file like everybody else. `analyst` and `fixer` need the registry — one because
-a finding must rest on a call, the other because every edit and every verification command it runs
-goes through it.
+and both answer in a file like everybody else. `analyst`, `sweeper`, `vuln` and `fixer` need the
+registry — the first three because a finding must rest on a call, the last because every edit and
+every verification command it runs goes through it. `sweeper` and `vuln` are the same work shape as
+`analyst`; the split exists so a product can bind a different model to outdated sweeps or to
+vulnerability work alone.
 """
 
 

@@ -199,6 +199,12 @@ class FakePlatform:
             item for item in self.tracked if label in self.labels.get(item.number, ()) and item.key
         )
 
+    def closed_issues(self, *, label: str) -> tuple[Issue, ...]:
+        self._check()
+        return tuple(
+            item for item in self.closed if label in self.labels.get(item.number, ()) and item.key
+        )
+
     def raise_issue(self, new: NewIssue, *, label: str) -> Issue:
         self._check()
         number = len(self.tracked) + len(self.closed) + 1
@@ -214,12 +220,19 @@ class FakePlatform:
         self.calls.append(Call("raise_issue", key=new.key, detail=new.title))
         return issue
 
-    def edit_issue(self, issue: Issue, body: str) -> None:
+    def edit_issue(self, issue: Issue, body: str, *, title: str | None = None) -> None:
         self._check()
-        self.tracked = [
-            replace(item, body=body) if item.number == issue.number else item
-            for item in self.tracked
-        ]
+
+        def refresh(item: Issue) -> Issue:
+            if item.number != issue.number:
+                return item
+            updated = replace(item, body=body, key=marker.read(body) or item.key)
+            if title is not None:
+                updated = replace(updated, title=title)
+            return updated
+
+        self.tracked = [refresh(item) for item in self.tracked]
+        self.closed = [refresh(item) for item in self.closed]
         self.calls.append(Call("edit_issue", key=issue.key))
 
     def note(self, issue: Issue, body: str) -> None:
@@ -229,7 +242,10 @@ class FakePlatform:
 
     def issue_comment_bodies(self, number: int) -> tuple[str, ...]:
         self._check()
-        key = next((item.key for item in self.tracked if item.number == number), "")
+        key = next(
+            (item.key for item in (*self.tracked, *self.closed) if item.number == number),
+            "",
+        )
         return tuple(body for item_key, body in self.notes if item_key == key)
 
     def close_issue(self, issue: Issue) -> None:
@@ -237,6 +253,13 @@ class FakePlatform:
         self.tracked = [item for item in self.tracked if item.number != issue.number]
         self.closed.append(issue)
         self.calls.append(Call("close_issue", key=issue.key))
+
+    def reopen_issue(self, issue: Issue) -> None:
+        self._check()
+        self.closed = [item for item in self.closed if item.number != issue.number]
+        if all(item.number != issue.number for item in self.tracked):
+            self.tracked.append(issue)
+        self.calls.append(Call("reopen_issue", key=issue.key))
 
     def proposals(self, *, prefix: str) -> tuple[Proposal, ...]:
         self._check()
@@ -287,6 +310,8 @@ class FakePlatform:
         )
         self.proposed.append(opened)
         self.bodies.append((new.head, new.body))
+        if new.labels:
+            self.labels[number] = tuple(new.labels)
         self.calls.append(Call("propose", detail=new.title))
         return opened
 

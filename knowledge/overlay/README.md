@@ -57,7 +57,9 @@ from the overlay: this file is in version control.
 
 A ceiling nobody wants is written as `null` rather than left out. A missing key is a question nobody
 answered, and reading it as "no limit" would make the most expensive setting in the file the one
-nobody typed.
+nobody typed. Optional: `fixer_token_reserve` may be omitted to leave no fixer slice; `sweeper` may
+be omitted under `models` (maintain `deps-outdated` then uses the `analyst` binding); `vuln` may be
+omitted too (`deps-vuln` / `code-vuln` then use `analyst`).
 
 ## Which copy a review reads
 

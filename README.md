@@ -40,8 +40,29 @@ repo's releases. There is no separate library pin anymore: knowledge ships insid
 ## Design
 
 Start with [`DESIGN.md`](DESIGN.md) — knowledge and runner in one document. The exchange contract is
-[`knowledge/CONTRACT.md`](knowledge/CONTRACT.md). Runner release notes:
-[`CHANGELOG.md`](CHANGELOG.md); library notes: [`knowledge/CHANGELOG.md`](knowledge/CHANGELOG.md).
+[`knowledge/CONTRACT.md`](knowledge/CONTRACT.md). Release notes (runner + judgement):
+[`CHANGELOG.md`](CHANGELOG.md). One product version in [`pyproject.toml`](pyproject.toml).
+
+## Knowledge library
+
+[`knowledge/`](knowledge/) is the agent's only source of **judgement**: what counts as a problem,
+what to look at, in what order to act, and when to block. Prose only — no runner code and no
+product-specific values (those live in each product's overlay).
+
+| Path | Contents |
+| --- | --- |
+| [`knowledge/INDEX.md`](knowledge/INDEX.md) | generated table of contents; agent entry point |
+| [`knowledge/CONTRACT.md`](knowledge/CONTRACT.md) | what a knowledge author may rely on |
+| [`knowledge/playbooks/`](knowledge/playbooks/) | what to do for a given trigger |
+| [`knowledge/capabilities/`](knowledge/capabilities/) | what to look for, and how to judge it |
+| [`knowledge/policy/`](knowledge/policy/) | verdicts, quarantine, holds, grouping, bundles |
+| [`knowledge/ecosystems/`](knowledge/ecosystems/) | per-ecosystem sources and procedures |
+| [`knowledge/overlay/`](knowledge/overlay/) | what a product defines for itself, with templates |
+
+An agent run reads `INDEX.md` and the product overlay, selects a playbook, then loads only the
+documents that playbook needs. Humans: start with `DESIGN.md`, then `CONTRACT.md`, then one
+playbook end to end. `library.yaml` carries only `contract_version`; there is no separate library
+pin.
 
 ## Usage
 
@@ -51,6 +72,13 @@ uv run agent review  --repo . --change 12 --base main [--publish]
 uv run agent maintain --repo . [--scheduled] [--publish]
 uv run agent maintain --repo . --wake-issue 7 --wake-comment 42 --actor <login>
 uv run agent explain --run <run-id>
+```
+
+Local dogfood against the sibling demo product is one command — see [`DOGFOOD.md`](DOGFOOD.md):
+
+```bash
+./scripts/dogfood-maintain.sh          # maintain --publish on ../ai-devsecops-demo2 (waits until done)
+./scripts/dogfood-maintain.sh --bg     # same, detached; prints log + run dir
 ```
 
 Knowledge ships with the agent (bundled in the wheel / `knowledge/` in this checkout). `--library`
@@ -197,7 +225,10 @@ and never from the overlay, which is a file in git.
 
 Only the roles a plan reaches are ever created, so a product that switches every role to another
 provider never loads the previous adapter at all — the SDK it needed can be uninstalled. A role the
-run needs and nobody bound is a startup error naming the role, not a silent substitution.
+run needs and nobody bound is a startup error naming the role, not a silent substitution. One
+exception: `sweeper` (maintain `deps-outdated`) and `vuln` (`deps-vuln` / `code-vuln`) fall back to
+the `analyst` model when unbound, so existing overlays keep working until a product binds a cheaper
+sweep model or a specialised vulnerability model.
 
 What a role *requires* is not configurable. An analyst that cannot call the tool registry has nothing
 to establish a fact with, so those needs live in `agent/roles.py` next to the code that has them. Each
@@ -223,10 +254,12 @@ is identical, and a second set would only be a second thing to keep in step.
 How much a maintenance run may leave behind is a different question — how loud the tracker gets, not
 what the run costs — so it has its own block inside the same section, `maintenance.queue`.
 
-Every key is required, and a ceiling that is not wanted is written as `null` rather than omitted. A
-missing key is a question nobody answered, and treating it as "no limit" would make the most
-expensive setting in the file the one nobody ever typed. One number is the agent's and not the
-product's: `tool_calls_per_task` in `agent/config/limits.yaml`, which counts a step nobody outside
+Every key under `limits` that sets a ceiling is required, and a ceiling that is not wanted is
+written as `null` rather than omitted. A missing key is a question nobody answered, and treating it
+as "no limit" would make the most expensive setting in the file the one nobody ever typed. One
+optional exception: `fixer_token_reserve` may be omitted (or `null`) to leave no slice for fixers —
+today's behaviour. One number is the agent's and not the product's: `tool_calls_per_task` in
+`agent/config/limits.yaml`, which counts a step nobody outside
 the agent sees and guards against a session that has stopped making progress.
 
 Every limit ends the same way. A task that hits one, or that the shared ceiling could not pay for, is
@@ -446,7 +479,7 @@ on, where a person is reading the reply.
 
 The last two rows are the ones that matter in practice. "Still present" on an issue whose check failed
 would be as unfounded as closing it, and a weekly reminder that nothing is known is what teaches a team
-to mute the agent. And a label proves nothing about authorship: anyone can apply `agent`, so the marker
+to mute the agent. And a label proves nothing about authorship: anyone can apply `ai agent`, so the marker
 is what the reconciliation trusts.
 
 Titles are built from the parts that identify a problem and none that drift — no version, no advisory

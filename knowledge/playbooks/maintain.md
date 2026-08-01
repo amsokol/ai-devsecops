@@ -13,7 +13,7 @@ change request: judging changes belongs to [`pr-review.md`](pr-review.md).
 ## Trigger
 
 - A manual run.
-- A human comment on an open issue labelled `agent`.
+- A human comment on an open issue labelled `ai agent`.
 - A schedule, typically weekly.
 
 Comments from bots must not trigger a run, and a comment in a change-request conversation is not a
@@ -49,7 +49,7 @@ human's explicit wishes.
 - Manifests, locks and source surfaces discovered from the overlay and the ecosystem documents.
 - Holds, unlocks and bundle membership from the comment pass.
 - Version, publication-time and advisory evidence per ecosystem.
-- Open issues labelled `agent`, so that reporting stays idempotent.
+- Open issues labelled `ai agent`, so that reporting stays idempotent.
 - On a wake: the issue and its comment thread.
 
 ## Aggregation
@@ -59,19 +59,22 @@ human's explicit wishes.
 3. Match findings against open issues by key: update the existing issue rather than opening a second
    one for the same problem.
 4. Decide, per finding, whether it is shippable now — cleared quarantine, no unmet hold, bundle able
-   to move as a whole, verification available.
+   to move as a whole, cross-bundle blockers satisfied, verification available. Do not raise an
+   outdated issue for a finding that fails this test.
 
 ## Verdict and actions
 
 ### Issues
 
-One issue per finding, titled so that the key is stable and searchable:
+One issue per finding. Dependency titles keep a stable subject (package / bundle); code titles use
+a short capability phrase plus a trimmed summary — paths stay in the body:
 
 ```text
-agent: <capability> — <short stable key>
+🟠 code quality — client exits 0 on Echo RPC failure
+🟠 quarantine broken — serde
 ```
 
-Label it `agent`, creating the label if it does not exist. The body carries the capability, severity,
+Label it `ai agent`, creating the label if it does not exist. The body carries the capability, severity,
 evidence — paths, versions, publication times, advisory references — the suggested remediation, and
 any quarantine note.
 
@@ -81,14 +84,22 @@ than arithmetic, that the finding needs approval ([`../policy/grouping.md`](../p
 The agent writes the rest of that issue — why it is waiting, what a comment there will cause, and the
 record of the approval once one is given. While a non-human blocker remains, report the finding as
 blocked instead — an issue asking for approval the agent cannot act on wastes attention and teaches
-humans to ignore it. For a bundle, open one issue for the bundle, never one per member. Do not open a
-routine major issue for a move that is already shipping as a security remediation.
+humans to ignore it. The same bar applies to **routine outdated**: open a dependency-update issue
+only when the move can ship now (bundle and cross-bundle blockers included), or when the pin **must**
+change for another reason (quarantine, unknown_age, floating, vulnerable). A newer cleared tip that
+cannot build with the rest of the tree is report noise, not an issue
+([`../policy/bundles.md`](../policy/bundles.md)). For a bundle, open one issue for the bundle, never
+one per member — set `bundle: <id>` on every member finding so the agent collapses them before
+publish. Do not open a routine major issue for a move that is already shipping as a security
+remediation.
 
 A **quarantine** finding (`kind: quarantine`) is blocked by the clock, not by a person
-([`../policy/quarantine.md`](../policy/quarantine.md)). Say that on the issue; do not ask for an
-unlock. An unlock comment there is refused. A **vulnerability** whose only fixed version is still
-inside the window is the opposite: say the person may unlock as a security exception, and set
-`needs_unlock`.
+([`../policy/quarantine.md`](../policy/quarantine.md)), when there is no cleared `target`. Say that
+on the issue; do not ask for an unlock. An unlock comment there is refused. This includes a pin
+**already on the default branch** whose `current_cleared` is not true — maintenance must raise or
+update that issue; silence is a defect the runner refuses. A **vulnerability** whose only fixed
+version is still inside the window is the opposite: say the person may unlock as a security
+exception, and set `needs_unlock`.
 
 ### Fix branches
 
@@ -105,6 +116,7 @@ task cannot do it even if instructed to ([`../CONTRACT.md`](../CONTRACT.md), sec
 | fetches, creates the branch from the finding key and class, stages, commits, pushes | applies the change in the worktree it was given |
 | opens or updates the change request and writes its body from the record | runs the verification the change needs and reports what it did |
 | links the issues this change remediates, and only those | says why it refused, when it refuses |
+| labels the pull request `ai agent` (same as tracked issues); title is `<class> fix for <subject>` without an `agent:` prefix | — |
 
 So a fix task has exactly two jobs, and both are judgement:
 
@@ -140,13 +152,15 @@ change request. Unlock stamps on the issue authorise the subject, not the tip of
 
 Reconcile against **this** checkout only, and only on the strength of a task that actually looked:
 
-1. List open issues labelled `agent`.
+1. List open issues labelled `ai agent`.
 2. For each, identify the task that owns that finding's capability. Close the issue only when that
    task finished with outcome `clean` and the finding is absent — that is, it verified the tree rather
    than merely failing to report. Comment the evidence when closing.
 3. When the owning task ended unverified or exhausted, leave the issue open and say nothing. Silence
    is correct here; a "still present" comment would be as unfounded as a closure.
 4. Never close based on another branch or an unmerged fix.
+5. When a finding returns after its issue was closed, the agent reopens that closed issue (same
+   finding key) with a comment that it returned — it does not open a second ticket.
 
 This condition is not pedantry. Closing on absence alone means the first scanner outage marks every
 known problem as fixed, and the record disappears exactly when the tooling is least trustworthy

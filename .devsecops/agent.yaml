@@ -54,6 +54,8 @@ maintenance:
     tokens_per_run: 12000000
     minutes_per_task: 10
     tasks_at_once: 2
+    # Leave room for fix sessions after a fat outdated/vuln sweep.
+    fixer_token_reserve: 2000000
 
   # How much this run may leave behind. Not what it costs — how loud it is. Reaching either limit
   # defers work to the next run and says so in the record; nothing is dropped.

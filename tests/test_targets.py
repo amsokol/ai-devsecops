@@ -16,14 +16,21 @@ DAYS = 7
 class FakeHttp:
     """Serves canned registry JSON for cleared_pin_target tests."""
 
-    def __init__(self, routes: dict[str, object]) -> None:
+    def __init__(self, routes: dict[str, object], *, truncated: set[str] | None = None) -> None:
         self.routes = routes
+        self.truncated = truncated or set()
 
     def get(self, url: str) -> Response:
         for prefix, body in self.routes.items():
             if url.startswith(prefix) or url == prefix:
                 text = body if isinstance(body, str) else json.dumps(body)
-                return Response(url=url, status=200, headers={}, body=text, truncated=False)
+                return Response(
+                    url=url,
+                    status=200,
+                    headers={},
+                    body=text,
+                    truncated=url in self.truncated or prefix in self.truncated,
+                )
         raise AssertionError(f"unexpected URL {url}")
 
 
@@ -265,6 +272,91 @@ def test_pypi_young_tip_pending_and_pin_down() -> None:
     assert answer.pending == ("2.32.1",)
 
 
+def test_pypi_requirement_form_dates_the_pin_in_use() -> None:
+    """Prep passes `name==version`; that must not leave current_cleared null (#86/#79)."""
+    http = FakeHttp(
+        {
+            "https://pypi.org/pypi/connectrpc/json": {"releases": {"0.11.1": [], "0.11.0": []}},
+            "https://pypi.org/pypi/connectrpc/0.11.1/json": {
+                "urls": [{"upload_time_iso_8601": "2026-07-15T06:33:29.396530Z"}]
+            },
+            "https://pypi.org/pypi/connectrpc/0.11.0/json": {
+                "urls": [{"upload_time_iso_8601": "2026-06-01T00:00:00.000000Z"}]
+            },
+        }
+    )
+    answer = cleared_pin_target(
+        http,  # type: ignore[arg-type]
+        ecosystem="ecosystems/python-pip-compile",
+        package="connectrpc",
+        current="connectrpc==0.11.1",
+        days=DAYS,
+        now=NOW,
+    )
+    assert answer.current == "0.11.1"
+    assert answer.current_cleared is True
+    assert answer.current_resolved == "0.11.1"
+
+
+def test_pypi_truncated_package_json_falls_back_to_rss() -> None:
+    """Full /json for busy packages (ruff) exceeds the body limit — still date the pin (#87)."""
+    http = FakeHttp(
+        {
+            "https://pypi.org/pypi/ruff/json": "{not-json-because-truncated",
+            "https://pypi.org/rss/project/ruff/releases.xml": """\
+<?xml version="1.0"?>
+<rss><channel>
+<title>PyPI recent updates for ruff</title>
+<title>0.15.22</title>
+<title>0.15.21</title>
+</channel></rss>
+""",
+            "https://pypi.org/pypi/ruff/0.15.22/json": {
+                "urls": [{"upload_time_iso_8601": "2026-07-16T15:13:19.452734Z"}]
+            },
+            "https://pypi.org/pypi/ruff/0.15.21/json": {
+                "urls": [{"upload_time_iso_8601": "2026-07-09T20:00:53.000000Z"}]
+            },
+        },
+        truncated={"https://pypi.org/pypi/ruff/json"},
+    )
+    answer = cleared_pin_target(
+        http,  # type: ignore[arg-type]
+        ecosystem="ecosystems/python-pip-compile",
+        package="ruff",
+        current="ruff==0.15.22",
+        days=DAYS,
+        now=NOW,
+    )
+    assert answer.current_cleared is True
+    assert answer.current_resolved == "0.15.22"
+
+
+def test_floating_action_without_concrete_tip_is_float_like() -> None:
+    """@stable with no dated concrete tip is a floating ref, not a missing publish date (#84)."""
+    http = FakeHttp(
+        {
+            "https://api.github.com/repos/dtolnay/rust-toolchain/tags": [
+                {"name": "stable"},
+                {"name": "v1"},
+            ],
+        }
+    )
+    answer = cleared_pin_target(
+        http,  # type: ignore[arg-type]
+        ecosystem="ecosystems/github-actions",
+        kind="action",
+        package="dtolnay/rust-toolchain",
+        current="stable",
+        days=DAYS,
+        now=NOW,
+    )
+    assert answer.float_like is True
+    assert answer.current_resolved is None
+    assert answer.current_cleared is None
+    assert answer.target is None
+
+
 def test_go_newer_cleared_wins() -> None:
     http = FakeHttp(
         {
@@ -295,21 +387,23 @@ def test_go_newer_cleared_wins() -> None:
     assert answer.pending == ("v0.9.1",)
 
 
-def test_bazel_yanked_excluded_and_github_release_time() -> None:
+def test_bazel_yanked_excluded_and_bcr_publish_time() -> None:
     http = FakeHttp(
         {
             "https://raw.githubusercontent.com/bazelbuild/bazel-central-registry/"
             "main/modules/rules_python/metadata.json": {
                 "versions": ["0.40.0", "1.0.0", "1.1.0"],
                 "yanked_versions": {"1.1.0": "broken"},
-                "repository": ["https://github.com/bazelbuild/rules_python"],
+                "repository": ["github:bazelbuild/rules_python"],
             },
-            "https://api.github.com/repos/bazelbuild/rules_python/releases/tags/1.0.0": {
-                "published_at": "2026-06-01T00:00:00Z"
-            },
-            "https://api.github.com/repos/bazelbuild/rules_python/releases/tags/0.40.0": {
-                "published_at": "2026-01-01T00:00:00Z"
-            },
+            "https://api.github.com/repos/bazelbuild/bazel-central-registry/commits"
+            "?path=modules%2Frules_python%2F0.40.0%2Fsource.json": [
+                {"commit": {"committer": {"date": "2026-01-01T00:00:00Z"}}}
+            ],
+            "https://api.github.com/repos/bazelbuild/bazel-central-registry/commits"
+            "?path=modules%2Frules_python%2F1.0.0%2Fsource.json": [
+                {"commit": {"committer": {"date": "2026-06-01T00:00:00Z"}}}
+            ],
         }
     )
     answer = cleared_pin_target(
@@ -323,6 +417,7 @@ def test_bazel_yanked_excluded_and_github_release_time() -> None:
     # Major jump 0→1 is not routine target; line stays on 0.
     assert answer.line == "0"
     assert answer.target is None
+    assert answer.current_cleared is True
 
 
 def test_bazel_same_major_newer_cleared() -> None:
@@ -332,14 +427,16 @@ def test_bazel_same_major_newer_cleared() -> None:
             "main/modules/rules_python/metadata.json": {
                 "versions": ["1.0.0", "1.1.0", "1.2.0"],
                 "yanked_versions": {"1.2.0": "yanked"},
-                "repository": ["https://github.com/bazelbuild/rules_python"],
+                "repository": ["github:bazelbuild/rules_python"],
             },
-            "https://api.github.com/repos/bazelbuild/rules_python/releases/tags/1.1.0": {
-                "published_at": "2026-07-20T00:00:00Z"
-            },
-            "https://api.github.com/repos/bazelbuild/rules_python/releases/tags/1.0.0": {
-                "published_at": "2026-06-01T00:00:00Z"
-            },
+            "https://api.github.com/repos/bazelbuild/bazel-central-registry/commits"
+            "?path=modules%2Frules_python%2F1.0.0%2Fsource.json": [
+                {"commit": {"committer": {"date": "2026-06-01T00:00:00Z"}}}
+            ],
+            "https://api.github.com/repos/bazelbuild/bazel-central-registry/commits"
+            "?path=modules%2Frules_python%2F1.1.0%2Fsource.json": [
+                {"commit": {"committer": {"date": "2026-07-20T00:00:00Z"}}}
+            ],
         }
     )
     answer = cleared_pin_target(
@@ -350,11 +447,69 @@ def test_bazel_same_major_newer_cleared() -> None:
         days=DAYS,
         now=NOW,
     )
-    # 1.1.0 young (with heuristic margin still in window from Jul 20); tip young → pin stays or
-    # pending. With margin_days=1, Jul 20 + 7 = Jul 27, NOW Jul 26 → not cleared.
+    # 1.1.0 young (Jul 20 + 7d = Jul 27, NOW Jul 26) → pending; yanked tip excluded.
     assert answer.target is None
     assert "1.1.0" in answer.pending
-    assert "1.2.0" not in answer.pending  # yanked
+    assert "1.2.0" not in answer.pending
+    assert answer.current_cleared is True
+
+
+def test_bazel_bcr_date_preferred_over_upstream_release() -> None:
+    """BCR commit date is source of truth; a conflicting GitHub Release must not win."""
+    http = FakeHttp(
+        {
+            "https://raw.githubusercontent.com/bazelbuild/bazel-central-registry/"
+            "main/modules/rules_rust/metadata.json": {
+                "versions": ["0.71.3"],
+                "yanked_versions": {},
+                "repository": ["github:bazelbuild/rules_rust"],
+            },
+            "https://api.github.com/repos/bazelbuild/bazel-central-registry/commits"
+            "?path=modules%2Frules_rust%2F0.71.3%2Fsource.json": [
+                {"commit": {"committer": {"date": "2026-07-02T03:28:44Z"}}}
+            ],
+            # Would keep the pin in quarantine if used (young) — must be ignored when BCR answers.
+            "https://api.github.com/repos/bazelbuild/rules_rust/releases/tags/0.71.3": {
+                "published_at": "2026-07-24T00:00:00Z"
+            },
+        }
+    )
+    answer = cleared_pin_target(
+        http,  # type: ignore[arg-type]
+        ecosystem="ecosystems/bazel",
+        package="rules_rust",
+        current="0.71.3",
+        days=14,
+        now=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    assert answer.current_cleared is True
+
+
+def test_bazel_falls_back_to_github_release_when_bcr_has_no_commit() -> None:
+    http = FakeHttp(
+        {
+            "https://raw.githubusercontent.com/bazelbuild/bazel-central-registry/"
+            "main/modules/rules_rust/metadata.json": {
+                "versions": ["0.71.3"],
+                "yanked_versions": {},
+                "repository": ["github:bazelbuild/rules_rust"],
+            },
+            "https://api.github.com/repos/bazelbuild/bazel-central-registry/commits"
+            "?path=modules%2Frules_rust%2F0.71.3%2Fsource.json": [],
+            "https://api.github.com/repos/bazelbuild/rules_rust/releases/tags/0.71.3": {
+                "published_at": "2026-07-02T03:28:44Z"
+            },
+        }
+    )
+    answer = cleared_pin_target(
+        http,  # type: ignore[arg-type]
+        ecosystem="ecosystems/bazel",
+        package="rules_rust",
+        current="0.71.3",
+        days=14,
+        now=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    assert answer.current_cleared is True
 
 
 def test_bsr_fake_command_newer_cleared() -> None:
@@ -429,8 +584,8 @@ def test_bsr_falls_back_to_plugin_label_list() -> None:
     assert answer.pending == ("v0.9.1",)
 
 
-def test_bsr_empty_plugin_labels_fall_back_to_github_releases() -> None:
-    """Protoc plugins often return an empty label list; GitHub Releases still name cleared tags."""
+def test_bsr_empty_plugin_labels_use_plugins_catalog_then_github() -> None:
+    """Protoc plugins often return an empty label list; catalog miss falls through to Releases."""
 
     def run_command(command: list[str]) -> CommandResult:
         # module fails; plugin "succeeds" with empty body — the live buffa shape.
@@ -448,6 +603,8 @@ def test_bsr_empty_plugin_labels_fall_back_to_github_releases() -> None:
 
     http = FakeHttp(
         {
+            "https://api.github.com/repos/bufbuild/plugins/contents/"
+            "plugins/anthropics/buffa?ref=main": [],
             "https://api.github.com/repos/anthropics/buffa/releases": [
                 {
                     "tag_name": "v0.9.1",
@@ -483,9 +640,39 @@ def test_bsr_empty_plugin_labels_fall_back_to_github_releases() -> None:
     assert answer.pending == ("v0.9.1",)
 
 
+def test_bsr_plugins_catalog_dates_connectrpc_rust() -> None:
+    """buf.build/connectrpc/rust is not GitHub connectrpc/rust — catalog + source_url win."""
+    http = FakeHttp(
+        {
+            "https://api.github.com/repos/bufbuild/plugins/contents/"
+            "plugins/connectrpc/rust?ref=main": [
+                {"name": "v0.8.0", "type": "dir"},
+                {"name": "source.yaml", "type": "file"},
+            ],
+            "https://api.github.com/repos/bufbuild/plugins/commits"
+            "?path=plugins%2Fconnectrpc%2Frust%2Fv0.8.0%2Fbuf.plugin.yaml": [
+                {"commit": {"committer": {"date": "2026-07-07T14:24:41Z"}}}
+            ],
+        }
+    )
+    answer = cleared_pin_target(
+        http,  # type: ignore[arg-type]
+        ecosystem="ecosystems/bsr",
+        package="buf.build/connectrpc/rust",
+        current="v0.8.0",
+        days=14,
+        now=datetime(2026, 8, 1, tzinfo=UTC),
+        run_command=None,
+    )
+    assert answer.current_cleared is True
+    assert answer.target is None
+
+
 def test_bsr_github_fallback_without_buf_command() -> None:
     http = FakeHttp(
         {
+            "https://api.github.com/repos/bufbuild/plugins/contents/"
+            "plugins/anthropics/buffa?ref=main": [],
             "https://api.github.com/repos/anthropics/buffa/releases": [
                 {
                     "tag_name": "v0.9.0",

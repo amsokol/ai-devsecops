@@ -8,7 +8,7 @@ from agent.library import Library
 
 
 def test_index_is_read_with_kinds_and_applies_to(library: Library) -> None:
-    assert len(library) == 9
+    assert len(library) == 12
     assert library.get("ecosystems/python-uv").applies_to == ("pyproject.toml", "uv.lock")
     assert library.get("playbooks/pr-review").kind == "playbook"
 
@@ -28,7 +28,15 @@ def test_closure_lists_roots_first_then_what_they_link_to(library: Library) -> N
         "playbooks/pr-review",
         "capabilities/deps-outdated",
         "policy/verdicts",
+        "policy/quarantine",
+        "evidence/acquisition",
     )
+
+
+def test_fact_method_reads_capability_profile(library: Library) -> None:
+    assert library.fact_method("ecosystems/python-uv", "advisories") == "tool"
+    assert library.fact_method("ecosystems/bazel", "advisories") == "none"
+    assert library.fact_method("ecosystems/python-uv", "missing") is None
 
 
 def test_closure_does_not_pull_in_a_playbook_mentioned_by_another(library: Library) -> None:

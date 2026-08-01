@@ -7,7 +7,8 @@ restraint the whole design:
 
 *One issue per finding, found again by its key.* Not by title, which is prose and gets edited, and
 not by the label, which anybody can apply. A second issue for one problem is how a tracker becomes a
-place people stop looking.
+place people stop looking. A finding that returns after a complete close reopens that closed issue
+rather than starting a fresh ticket — history and unlock stamps stay on one conversation.
 
 *A closure states its evidence.* An issue is closed when the check that owns the finding reached a
 complete answer without it, twice in a row. Complete rules out the scanner outage that would read as
@@ -31,16 +32,47 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agent.absence import Absences
+from agent.bundles import group_key, legacy_key, member_subjects
 from agent.escalate import Escalation
-from agent.findings import Action, Finding, Klass
+from agent.findings import (
+    Action,
+    Finding,
+    Kind,
+    Klass,
+    Severity,
+    code_fingerprint,
+    code_fingerprint_from_key,
+)
 from agent.reconcile import Posted
 from agent.scm import marker
 from agent.scm.port import Issue, NewIssue, Platform, ScmError
 from agent.unlock import Approval, held, is_routine_quarantine, read, render, stamped
 from agent.verdict import Judged, Verdict
 
-LABEL = "agent"
+LABEL = "ai agent"
 """One label for everything the agent tracks, so a team can find, query or mute the whole set."""
+
+LEGACY_LABELS = ("agent",)
+"""Earlier label name; still read so open issues are not duplicated after a rename."""
+
+VULN_CAPABILITIES = frozenset({"capabilities/deps-vuln", "capabilities/code-vuln"})
+"""Findings from these checks take the new-issue ceiling before routine drift."""
+
+RETURNED_NOTE = (
+    "This finding is present again on the default branch after a complete check reported it, so "
+    "this issue is open once more. History and any unlock stay here; the body has the current "
+    "detail."
+)
+
+MIGRATED_NOTE = (
+    "This pin is tracked under the coupled-bundle issue {reference} (`{key}`). Closing this "
+    "member ticket so the bundle has one conversation."
+)
+
+ADVISORY_MIGRATED_NOTE = (
+    "Advisories on this pin are tracked under {reference} (`{key}`). Closing this per-advisory "
+    "ticket so the pin has one conversation."
+)
 
 
 @dataclass(slots=True)
@@ -62,6 +94,25 @@ class Tracking:
             "failure": self.failure,
             "tracked": dict(sorted(self.numbers.items())),
         }
+
+
+def open_tracked(platform: Platform, *, label: str = LABEL) -> tuple[Issue, ...]:
+    """Open issues under the current label and any legacy names, deduped by number."""
+    return _labelled(platform.issues, label=label)
+
+
+def closed_tracked(platform: Platform, *, label: str = LABEL) -> tuple[Issue, ...]:
+    """Closed issues under the current label and any legacy names, deduped by number."""
+    return _labelled(platform.closed_issues, label=label)
+
+
+def _labelled(fetch, *, label: str) -> tuple[Issue, ...]:
+    names = (label, *LEGACY_LABELS) if label == LABEL else (label,)
+    by_number: dict[int, Issue] = {}
+    for name in names:
+        for item in fetch(label=name):
+            by_number.setdefault(item.number, item)
+    return tuple(by_number[number] for number in sorted(by_number))
 
 
 def track_findings(
@@ -128,7 +179,7 @@ def _track(
     approvals: dict[str, Approval],
     surfaces: dict[str, tuple[tuple[str, ...], ...]] | None,
 ) -> Tracking:
-    listed = platform.issues(label=label) if known is None else known
+    listed = open_tracked(platform, label=label) if known is None else known
     existing = {item.key: item for item in listed if item.key}
     # Findings and escalations are reconciled by one loop because they are the same kind of thing to
     # a reader: one issue, found again by its key, closed when the check that owns it says so.
@@ -144,39 +195,83 @@ def _track(
         for item in verdict.judged
     }
     wanted |= {item.key: (item.title, item.body) for item in escalations}
+    by_finding = {item.finding.key: item.finding for item in verdict.judged}
     _keep_approvals(platform, record, existing, approvals, rewritten=frozenset(wanted))
     # A broken check hides everything it would have found, so the news that it is broken does not
     # queue behind the findings of the checks that still work.
     exempt = {item.key for item in escalations}
+    closed_by_key = _closed_by_key(
+        platform, label=label, needed=frozenset(wanted) - frozenset(existing)
+    )
+    # Count the new-issue ceiling by subject (or bundle), not by advisory: nine CVEs on one pin
+    # are one conversation's worth of attention, not nine slots against the weekly budget.
+    # Vulnerability findings take those slots first so a quiet tracker still surfaces advisories.
+    raised_subjects: set[str] = set()
+    # Code soft-dedup: when the key moved (slug rephrased) but capability+path+symbol still match
+    # exactly one open issue, update that issue instead of raising a duplicate.
+    absorbed: set[str] = set()
 
-    for key, (title, body) in sorted(wanted.items()):
+    for key, (title, body) in sorted(
+        wanted.items(),
+        key=lambda item: _raise_priority(item[0], by_finding.get(item[0]), exempt),
+    ):
         issue = existing.get(key)
+        finding = by_finding.get(key)
         if issue is None:
-            if record.raised >= limit and key not in exempt:
+            twin = _code_twin(existing, finding, wanted=frozenset(wanted), absorbed=absorbed)
+            if twin is not None:
+                old_key, issue = twin
+                if issue.body.strip() != body.strip() or issue.title != title:
+                    platform.edit_issue(issue, body, title=title)
+                    record.posted.append(
+                        Posted("updated", key, f"same path+symbol as `{old_key}`; key migrated")
+                    )
+                else:
+                    record.posted.append(Posted("unchanged", key, f"same path+symbol as `{old_key}`"))
+                record.numbers[key] = issue.number
+                absorbed.add(old_key)
+                absences.reported(key, finding)
+                continue
+            prior = closed_by_key.get(key)
+            if prior is not None:
+                platform.reopen_issue(prior)
+                platform.note(prior, RETURNED_NOTE)
+                if prior.body.strip() != body.strip() or prior.title != title:
+                    platform.edit_issue(prior, body, title=title)
+                record.numbers[key] = prior.number
+                record.posted.append(Posted("reopened", key, "the finding is back"))
+                absences.reported(key, finding)
+                continue
+            subject = _ceiling_subject(finding, key)
+            if record.raised >= limit and key not in exempt and subject not in raised_subjects:
                 # Left for the next run rather than dropped or merged into one issue: a finding
                 # squeezed into somebody else's issue is a finding that loses its own key, and one
-                # dropped silently is one nobody knows was found.
+                # dropped silently is one nobody knows was found. Same subject as an issue already
+                # raised this run still opens — the ceiling counts attention units, not advisories.
                 record.posted.append(
                     Posted("deferred", key, f"this run's limit of {limit} new issue(s) is reached")
                 )
                 continue
             opened = platform.raise_issue(NewIssue(key=key, title=title, body=body), label=label)
             record.raised += 1
+            raised_subjects.add(subject)
             record.numbers[key] = opened.number
             record.posted.append(Posted("raised", key, opened.reference))
+            absences.reported(key, finding)
             continue
         record.numbers[key] = issue.number
-        if issue.body.strip() != body.strip():
-            platform.edit_issue(issue, body)
+        if issue.body.strip() != body.strip() or issue.title != title:
+            platform.edit_issue(issue, body, title=title)
             record.posted.append(Posted("updated", key, "the finding changed"))
         else:
             record.posted.append(Posted("unchanged", key))
+        absences.reported(key, finding)
 
-    for key in sorted(existing.keys() & wanted.keys()):
-        absences.reported(key)
+    _migrate_member_issues(platform, record, existing, verdict.judged)
+    _migrate_advisory_issues(platform, record, existing, verdict.judged)
 
     for key, issue in sorted(existing.items()):
-        if key in wanted:
+        if key in wanted or key in absorbed:
             continue
         reason = absences.settled(key)
         if reason is not None:
@@ -187,6 +282,147 @@ def _track(
         record.closed += 1
         record.posted.append(Posted("closed", key))
     return record
+
+
+def _code_twin(
+    existing: dict[str, Issue],
+    finding: Finding | None,
+    *,
+    wanted: frozenset[str],
+    absorbed: set[str],
+) -> tuple[str, Issue] | None:
+    """The sole open code issue sharing capability+path+symbol, when soft-dedup applies."""
+    if finding is None:
+        return None
+    fingerprint = code_fingerprint(finding)
+    if fingerprint is None:
+        return None
+    matches = [
+        (key, issue)
+        for key, issue in existing.items()
+        if key not in wanted
+        and key not in absorbed
+        and code_fingerprint_from_key(key) == fingerprint
+    ]
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _ceiling_subject(finding: Finding | None, key: str) -> str:
+    if finding is None:
+        return key
+    return group_key(finding)
+
+
+def _migrate_member_issues(
+    platform: Platform,
+    record: Tracking,
+    existing: dict[str, Issue],
+    judged: tuple[Judged, ...],
+) -> None:
+    """Close pre-collapse per-member issues once the bundle issue exists.
+
+    Waiting for absence would leave two open tickets for one move across two complete runs.
+    """
+    for item in judged:
+        finding = item.finding
+        if not finding.bundle.strip():
+            continue
+        bundle_issue = existing.get(finding.key)
+        if bundle_issue is None:
+            bundle_issue = _issue_by_number(existing, record.numbers.get(finding.key))
+        if bundle_issue is None:
+            # Newly raised this run — synthesise enough to point at it.
+            number = record.numbers.get(finding.key)
+            if number is None:
+                continue
+            bundle_issue = Issue(
+                number=number,
+                key=finding.key,
+                title="",
+                body="",
+            )
+        for subject in member_subjects(finding):
+            old = legacy_key(finding, subject)
+            if old == finding.key:
+                continue
+            prior = existing.get(old)
+            if prior is None:
+                continue
+            platform.note(
+                prior,
+                MIGRATED_NOTE.format(reference=f"#{bundle_issue.number}", key=finding.key),
+            )
+            platform.close_issue(prior)
+            record.closed += 1
+            record.posted.append(Posted("migrated", old, f"#{bundle_issue.number}"))
+            existing.pop(old, None)
+
+
+def _migrate_advisory_issues(
+    platform: Platform,
+    record: Tracking,
+    existing: dict[str, Issue],
+    judged: tuple[Judged, ...],
+) -> None:
+    """Close pre-collapse per-advisory issues once the pin's vulnerable issue exists.
+
+    Older agents keyed each CVE separately; the pin now has one key ending in `vulnerable`.
+    """
+    kind_tails = {item.value for item in Kind}
+    for item in judged:
+        finding = item.finding
+        if finding.kind is not Kind.VULNERABLE or finding.bundle.strip():
+            continue
+        if not finding.subject.ecosystem or not finding.subject.package:
+            continue
+        pin_issue = existing.get(finding.key)
+        if pin_issue is None:
+            pin_issue = _issue_by_number(existing, record.numbers.get(finding.key))
+        if pin_issue is None:
+            number = record.numbers.get(finding.key)
+            if number is None:
+                continue
+            pin_issue = Issue(number=number, key=finding.key, title="", body="")
+        prefix = f"{finding.capability}:{finding.subject.ecosystem}:{finding.subject.package}:"
+        for old, prior in list(existing.items()):
+            if old == finding.key or not old.startswith(prefix):
+                continue
+            suffix = old[len(prefix) :]
+            if suffix in kind_tails:
+                continue
+            platform.note(
+                prior,
+                ADVISORY_MIGRATED_NOTE.format(reference=f"#{pin_issue.number}", key=finding.key),
+            )
+            platform.close_issue(prior)
+            record.closed += 1
+            record.posted.append(Posted("migrated", old, f"#{pin_issue.number}"))
+            existing.pop(old, None)
+
+
+def _issue_by_number(existing: dict[str, Issue], number: int | None) -> Issue | None:
+    if number is None:
+        return None
+    for issue in existing.values():
+        if issue.number == number:
+            return issue
+    return None
+
+
+def _closed_by_key(platform: Platform, *, label: str, needed: frozenset[str]) -> dict[str, Issue]:
+    """Newest closed agent issue per finding key, when at least one key is missing from open."""
+    if not needed:
+        return {}
+    found: dict[str, Issue] = {}
+    for item in closed_tracked(platform, label=label):
+        if not item.key or item.key not in needed:
+            continue
+        prior = found.get(item.key)
+        if prior is None or item.number > prior.number:
+            found[item.key] = item
+    return found
 
 
 def _keep_approvals(
@@ -214,16 +450,79 @@ def _keep_approvals(
 
 
 def _title(judged: Judged) -> str:
-    """A title built from the parts that identify the problem and none that drift.
+    """A title that names severity and kind for a human scanning the issue list.
 
-    No version and no advisory identifier: both change while the problem stays the same, and a title
-    that changes is a title somebody's saved search stops matching. The key in the body is what the
-    agent itself reads; this is for the human scanning a list.
+    Package findings keep a stable subject in the title (package or bundle id) — version and
+    advisory stay out, so saved searches keep matching while the body updates. Code findings have
+    no package: the title uses a short human phrase for the capability plus a trimmed summary, and
+    the path lives only in the body. The finding key (with its slug) is what the agent reads.
     """
     finding = judged.finding
-    subject = finding.subject
-    what = subject.package or subject.path or finding.capability.rsplit("/", 1)[-1]
-    return f"agent: {finding.capability.rsplit('/', 1)[-1]} — {what}"
+    if finding.bundle.strip():
+        what = f"bundle {finding.bundle.strip()}"
+    elif (finding.subject.package or "").strip():
+        what = (finding.subject.package or "").strip()
+    elif (finding.subject.path or "").strip() or finding.capability in _TITLE_CAPABILITY:
+        what = _title_summary(finding.summary)
+    else:
+        what = finding.capability.rsplit("/", 1)[-1].replace("-", " ")
+    phrase = _TITLE_KIND.get(finding.kind) if finding.kind is not None else None
+    if phrase is None:
+        phrase = _TITLE_CAPABILITY.get(
+            finding.capability, finding.capability.rsplit("/", 1)[-1].replace("-", " ")
+        )
+    return f"{_TITLE_SEVERITY[finding.severity]} {phrase} — {what}"
+
+
+_TITLE_WHAT_MAX = 90
+"""Characters for the summary side of a code-finding title; full text stays in the body."""
+
+
+def _title_summary(summary: str) -> str:
+    text = " ".join(summary.split()).strip().rstrip(".")
+    if not text:
+        return "code finding"
+    if len(text) <= _TITLE_WHAT_MAX:
+        return text
+    cut = text[:_TITLE_WHAT_MAX].rsplit(" ", 1)[0].rstrip(",;:")
+    return f"{cut}…" if cut else text[:_TITLE_WHAT_MAX]
+
+
+_TITLE_SEVERITY = {
+    Severity.CRITICAL: "🔴",
+    Severity.HIGH: "🟠",
+    Severity.MEDIUM: "🟡",
+    Severity.LOW: "⚪",
+}
+
+_TITLE_KIND = {
+    Kind.FLOATING: "floating dependency",
+    Kind.QUARANTINE: "quarantine broken",
+    Kind.UNKNOWN_AGE: "release date unknown",
+    Kind.OUTDATED: "dependency update",
+    Kind.VULNERABLE: "vulnerability",
+    Kind.BUNDLE: "coupled bundle",
+}
+
+_TITLE_CAPABILITY = {
+    "capabilities/code-quality": "code quality",
+    "capabilities/code-vuln": "code vulnerability",
+}
+
+
+def _raise_priority(
+    key: str, finding: Finding | None, exempt: frozenset[str] | set[str]
+) -> tuple[int, str]:
+    """Sort key for opening new issues: vulns and escalations before routine drift."""
+    if key in exempt:
+        return (0, key)
+    if finding is not None and (
+        finding.klass is Klass.SECURITY
+        or finding.kind is Kind.VULNERABLE
+        or finding.capability in VULN_CAPABILITIES
+    ):
+        return (1, key)
+    return (2, key)
 
 
 def _body(
@@ -247,9 +546,12 @@ def _body(
         lines += ["", f"**Remediation.** {finding.remediation}"]
     facts = [
         ("Capability", f"`{finding.capability}`"),
+        ("Bundle", f"`{finding.bundle}`" if finding.bundle.strip() else ""),
         ("Subject", _subject(judged)),
+        ("Members", _members(finding)),
         ("Moves to", finding.target),
-        ("Advisory", finding.advisory),
+        ("Advisory", ", ".join(finding.advisory_ids)),
+        ("Brought in by", finding.via),
         ("Where", _where(judged)),
         ("Evidence", judged.reliability.value),
     ]
@@ -368,6 +670,21 @@ def _subject(judged: Judged) -> str:
     return " ".join(f"`{part}`" for part in parts if part)
 
 
+def _members(finding: Finding) -> str:
+    subjects = member_subjects(finding)
+    if len(subjects) <= 1 and not finding.bundle.strip():
+        return ""
+    named: list[str] = []
+    for subject in subjects:
+        if subject.ecosystem and subject.package:
+            named.append(f"`{subject.ecosystem}:{subject.package}`")
+        elif subject.package:
+            named.append(f"`{subject.package}`")
+        elif subject.path:
+            named.append(f"`{subject.path}`")
+    return ", ".join(named)
+
+
 def _where(judged: Judged) -> str:
     location = judged.finding.location
     if location is None:
@@ -389,6 +706,5 @@ def _closing_note(key: str, head: str) -> str:
         )
     return (
         f"`{capability}` ran to completion on {head[:12]} and this is no longer among its "
-        "findings, so this issue is closed. If it returns, a later run opens a new issue with the "
-        "same key."
+        "findings, so this issue is closed. If it returns, a later run reopens this issue."
     )

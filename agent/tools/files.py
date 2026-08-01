@@ -11,7 +11,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-MAX_READ_BYTES = 400_000
+MAX_READ_BYTES = 60_000
+"""How much of a file a read may return to the model.
+
+Aligned with the toolkit's model payload ceiling: a larger dump would be refused after the read
+anyway. Prefer `search_text` or a narrower path when the file is bigger.
+"""
 MAX_MATCHES = 200
 
 

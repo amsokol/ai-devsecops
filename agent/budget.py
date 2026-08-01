@@ -24,10 +24,15 @@ class RunBudget:
     `tokens` is optional because it can only be enforced where the backend reports usage. A money
     ceiling is deliberately absent: it needs a price per model, and a limit computed from prices
     nobody maintains would refuse work for a number that is wrong.
+
+    `fixer_reserve` keeps a slice of that ceiling for fix sessions. Analysts may spend only what is
+    above the reserve; fixers may spend up to the full ceiling. Absent or zero means today's
+    behaviour: whoever runs first can burn the whole budget.
     """
 
     max_parallel: int = 4
     tokens: int | None = None
+    fixer_reserve: int | None = None
 
 
 @dataclass(slots=True)
@@ -62,11 +67,19 @@ class Ledger:
         self.spend = Spend()
         self._lock = asyncio.Lock()
 
-    async def may_start(self) -> bool:
+    def _ceiling(self, *, for_fixer: bool) -> int | None:
+        if self.budget.tokens is None:
+            return None
+        if for_fixer or not self.budget.fixer_reserve:
+            return self.budget.tokens
+        return max(0, self.budget.tokens - self.budget.fixer_reserve)
+
+    async def may_start(self, *, for_fixer: bool = False) -> bool:
         async with self._lock:
-            if self.budget.tokens is None:
+            ceiling = self._ceiling(for_fixer=for_fixer)
+            if ceiling is None:
                 return True
-            return self.spend.tokens < self.budget.tokens
+            return self.spend.tokens < ceiling
 
     async def record(self, usage: Usage) -> None:
         async with self._lock:
@@ -77,7 +90,20 @@ class Ledger:
             if usage.total_tokens is not None:
                 self.spend.tokens += usage.total_tokens
 
-    def exhausted_detail(self) -> str:
+    def exhausted_detail(self, *, for_fixer: bool = False) -> str:
+        ceiling = self._ceiling(for_fixer=for_fixer)
+        if (
+            not for_fixer
+            and self.budget.fixer_reserve
+            and self.budget.tokens is not None
+            and ceiling is not None
+            and self.spend.tokens < self.budget.tokens
+        ):
+            return (
+                f"the run's token budget of {self.budget.tokens} has reached the fixer reserve "
+                f"of {self.budget.fixer_reserve} ({self.spend.tokens} used), so this task was "
+                "not started"
+            )
         return (
             f"the run's token budget of {self.budget.tokens} is spent "
             f"({self.spend.tokens} used), so this task was not started"

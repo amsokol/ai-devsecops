@@ -23,6 +23,7 @@ from agent.backends.port import Budget, Failure
 from agent.backends.select import Roster
 from agent.brief import FIX_RESULT_SHAPE, compose, knowledge_for, role_instructions
 from agent.budget import Ledger
+from agent.bundles import group_key
 from agent.containment import Checkout
 from agent.domain import FixOutcome, PlannedTask, Reason, Role
 from agent.errors import ConfigError
@@ -151,11 +152,15 @@ def branch_for(judged: Judged) -> str:
     them would be renamed by that, and next week's run would open a second branch for the same pin.
 
     The readable part is trimmed because a key is long and contains characters git would rather not
-    see; the digest of the exact subject is what keeps two trimmed names from colliding.
+    see; the digest of the exact subject is what keeps two trimmed names from colliding. A bundle
+    groups by bundle id so BSR and cargo members share one branch.
     """
     finding = judged.finding
-    subject = finding.subject.key()
-    readable = slug(finding.subject.package or finding.subject.path or finding.capability)
+    subject = group_key(finding)
+    if finding.bundle.strip():
+        readable = slug(f"bundle-{finding.bundle}")
+    else:
+        readable = slug(finding.subject.package or finding.subject.path or finding.capability)
     tail = hashlib.sha256(f"{finding.klass.value}:{subject}".encode()).hexdigest()[:8]
     return f"{BRANCH_PREFIX}{finding.klass.value}/{readable[:60].strip('-')}-{tail}"
 
@@ -250,14 +255,14 @@ def _grouped(
     approvals: dict[str, Approval],
     surfaces: Surfaces,
 ) -> tuple[tuple[Judged, ...], ...]:
-    """Fixable findings, one group per class and subject, in the order the run will ship them."""
+    """Fixable findings, one group per class and subject (or bundle), in ship order."""
     groups: dict[tuple[str, str], list[Judged]] = {}
     for item in _ordered(judged):
         reason = _unfixable(item, approvals, surfaces)
         if reason is not None:
             deferred.append((item.finding.key, reason))
             continue
-        groups.setdefault((item.finding.klass.value, item.finding.subject.key()), []).append(item)
+        groups.setdefault((item.finding.klass.value, group_key(item.finding)), []).append(item)
     return tuple(tuple(group) for group in groups.values())
 
 
@@ -396,6 +401,7 @@ async def apply(
         return []
     prepared: list[tuple[FixJob, Worktree]] = []
     fixes: list[Fix] = []
+    settled: set[Path] = set()
     for job in queue.jobs:
         try:
             prepared.append(
@@ -411,41 +417,51 @@ async def apply(
                 )
             )
 
-    slots = asyncio.Semaphore(ledger.budget.max_parallel)
-    results: list[Fix | None] = [None] * len(prepared)
+    try:
+        slots = asyncio.Semaphore(ledger.budget.max_parallel)
+        results: list[Fix | None] = [None] * len(prepared)
 
-    async def run_one(index: int, job: FixJob, tree: Worktree) -> None:
-        async with slots:
-            if not await ledger.may_start():
-                results[index] = Fix(
-                    job=job,
-                    outcome=FixOutcome.EXHAUSTED,
-                    reason=Reason.EXHAUSTED,
-                    detail=ledger.exhausted_detail(),
+        async def run_one(index: int, job: FixJob, tree: Worktree) -> None:
+            async with slots:
+                if not await ledger.may_start(for_fixer=True):
+                    results[index] = Fix(
+                        job=job,
+                        outcome=FixOutcome.EXHAUSTED,
+                        reason=Reason.EXHAUSTED,
+                        detail=ledger.exhausted_detail(for_fixer=True),
+                    )
+                    return
+                results[index] = await _one(
+                    job,
+                    tree=tree,
+                    roster=roster,
+                    library=library,
+                    notes=notes,
+                    surfaces=surfaces,
+                    tasks_dir=tasks_dir,
+                    budget=budget,
+                    toolkits=toolkits,
+                    ledger=ledger,
+                    checkout=checkout,
                 )
-                return
-            results[index] = await _one(
-                job,
-                tree=tree,
-                roster=roster,
-                library=library,
-                notes=notes,
-                surfaces=surfaces,
-                tasks_dir=tasks_dir,
-                budget=budget,
-                toolkits=toolkits,
-                ledger=ledger,
-                checkout=checkout,
-            )
 
-    await asyncio.gather(*(run_one(index, job, tree) for index, (job, tree) in enumerate(prepared)))
+        await asyncio.gather(
+            *(run_one(index, job, tree) for index, (job, tree) in enumerate(prepared))
+        )
 
-    for (_, tree), fix in zip(prepared, results, strict=True):
-        if fix is None:
-            continue
-        _settle(fix, tree=tree, run=run)
-        fixes.append(fix)
-    return fixes
+        for (_, tree), fix in zip(prepared, results, strict=True):
+            if fix is None:
+                continue
+            _settle(fix, tree=tree, run=run)
+            settled.add(tree.path)
+            fixes.append(fix)
+        return fixes
+    finally:
+        # Ctrl+C / CancelledError skips _settle: drop those checkouts and their branches so the
+        # next maintain is not stuck on "branch already exists". Settled trees already discarded.
+        for _, tree in prepared:
+            if tree.path not in settled:
+                tree.discard(keep_branch=False)
 
 
 async def _one(
@@ -609,13 +625,21 @@ def _settle(fix: Fix, *, tree: Worktree, run: str) -> None:
         if fix.job.awaiting_ci
         else (f"Verified: {surfaces}" if surfaces else "")
     )
+    advisories = tuple(
+        dict.fromkeys(
+            aid for item in (fix.job.judged, *fix.job.also) for aid in item.finding.advisory_ids
+        )
+    )
+    findings_line = f"Finding{'s' if fix.job.also else ''}: {', '.join(fix.job.keys)}"
+    if advisories:
+        findings_line += f" ({', '.join(advisories)})"
     message = "\n".join(
         [
             f"{finding.klass.value}: {finding.summary}",
             "",
             fix.notes,
             "",
-            f"Finding{'s' if fix.job.also else ''}: {', '.join(fix.job.keys)}",
+            findings_line,
             proof,
             f"Prepared by ai-devsecops-agent in run {run}.",
         ]
@@ -640,6 +664,13 @@ def _given(job: FixJob, surfaces: Surfaces) -> tuple[str, ...]:
         f"- Why it matters: {finding.rationale}",
         f"- Suggested remediation: {finding.remediation}",
     ]
+    advisories = tuple(
+        dict.fromkeys(
+            aid for item in (job.judged, *job.also) for aid in item.finding.advisory_ids
+        )
+    )
+    if advisories:
+        lines.append(f"- Advisories: {', '.join(advisories)}")
     if finding.location:
         where = finding.location.path
         if finding.location.line:

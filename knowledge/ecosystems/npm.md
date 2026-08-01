@@ -30,10 +30,15 @@ applies_to: [package.json, package-lock.json, pnpm-lock.yaml, yarn.lock]
 
 ## Evidence recipes
 
+**Declared pins.** Call `list_declared_pins` with `ecosystem=ecosystems/npm` first on every
+repository-wide outdated sweep. Record a fact for every package in its `packages` list — including
+pins that are fine — before querying the registry. The agent fails the task when the census is not
+covered. `file:` / `link:` / `workspace:` / git specs are omitted from that list.
+
 **Candidates / Moves to.** For each direct package pin, call `cleared_pin_target` with
 `ecosystem=ecosystems/npm`, `package=<name>`, and `current` as declared (or locked when classifying
 the resolved pin). Use its `target` as `Moves to` when set; put `pending` tips under Pending
-quarantine. Do **not** invent the concrete version from a narrow registry query or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target.
+quarantine. Do **not** invent the concrete version from a narrow registry query or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target. When `current_cleared` is `false`, emit `kind: quarantine` with `forbidden_state` (cite `evidence_key`); when it is `null`, emit `kind: unknown_age` with `forbidden_state` — say the release date is unknown, never quarantine. Do not leave the pin silent.
 
 `npm outdated` / `pnpm outdated` / `yarn outdated` remain useful to discover lag; they do not choose
 `Moves to`.

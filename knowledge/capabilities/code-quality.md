@@ -43,6 +43,10 @@ hides a real defect.
 A finding requires a concrete path to wrong behaviour, described in one sentence. "This could be
 cleaner" is not a finding; "when `parse` returns `None` this dereferences it and raises" is.
 
+Every path finding must set a stable `slug` (kebab-case) that names the problem for the key —
+for example `echo-rpc-nonzero-exit`. The summary may be rephrased between runs; the slug must not.
+When an open agent issue already exists for the same file and symbol, reuse that issue's slug.
+
 Prefer defects in code that runs. A flaw in an unreachable branch, a test fixture, or an example
 is at most low severity, and often not worth reporting at all.
 

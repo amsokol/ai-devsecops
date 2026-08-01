@@ -10,7 +10,7 @@ from agent.absence import Absences
 from agent.coverage import Coverage
 from agent.domain import Outcome, RunResult
 from agent.evidence import Evidence, Origin, Reliability, Subject
-from agent.findings import Action, Finding, Klass, Location, Severity
+from agent.findings import Action, Finding, Kind, Klass, Location, Severity, merge
 from agent.issues import LABEL, Tracking, track_findings
 from agent.scm.fake import FakePlatform
 from agent.scm.marker import read
@@ -38,6 +38,8 @@ def finding(*, advisory: str = "PYSEC-2026-1", version: str = "3.1.3") -> Findin
         rationale="pip-audit reports it against the resolved pin.",
         remediation="Bump jinja2 to 3.1.6.",
         advisory=advisory,
+        advisories=(advisory,) if advisory else (),
+        kind=Kind.VULNERABLE,
         location=Location(path="pyproject.toml", line=12),
     )
 
@@ -116,7 +118,105 @@ def test_a_new_finding_becomes_one_labelled_issue_carrying_its_key(platform: Fak
     tracked = platform.tracked[0]
     assert read(tracked.body) == finding().key
     assert platform.labels[tracked.number] == (LABEL,)
-    assert "jinja2" in tracked.title
+    assert tracked.title == "🟠 vulnerability — jinja2"
+    assert LABEL == "ai agent"
+
+
+def test_an_issue_under_the_legacy_label_is_still_found(platform: FakePlatform) -> None:
+    """Renaming the label must not raise a second ticket for the same finding key."""
+    from agent.scm import marker as scm_marker
+
+    key = finding().key
+    body = f"old body\n\n{scm_marker.render(key)}"
+    platform.tracked.append(
+        Issue(number=9, key=key, title="⚠️ agent: vulnerability — jinja2", body=body, reference="")
+    )
+    platform.labels[9] = ("agent",)
+    record = track(platform, verdict_of(judged(finding())))
+    assert "raised" not in what(record)
+    assert any(item.what == "updated" for item in record.posted)
+    assert len(platform.tracked) == 1
+    assert "agent:" not in platform.tracked[0].title
+
+
+def test_issue_titles_name_the_kind_for_a_human_scanning_the_list(platform: FakePlatform) -> None:
+    from agent.findings import with_kind_severity
+
+    cases = (
+        (Kind.FLOATING, "floating dependency", "dtolnay/rust-toolchain", "🟡"),
+        (Kind.QUARANTINE, "quarantine broken", "actions/checkout", "🟠"),
+        (Kind.UNKNOWN_AGE, "release date unknown", "buf.build/connectrpc/rust", "🟡"),
+        (Kind.OUTDATED, "dependency update", "serde", "⚪"),
+        (Kind.VULNERABLE, "vulnerability", "jinja2", "⚪"),
+    )
+    for kind, phrase, package, emoji in cases:
+        item = with_kind_severity(
+            Finding(
+                capability=(
+                    "capabilities/deps-vuln"
+                    if kind is Kind.VULNERABLE
+                    else "capabilities/deps-outdated"
+                ),
+                klass=Klass.SECURITY if kind is Kind.VULNERABLE else Klass.ROUTINE,
+                severity=Severity.LOW,
+                subject=Subject(ecosystem="ecosystems/cargo", package=package),
+                summary=f"{package} problem",
+                rationale="test",
+                kind=kind,
+                forbidden_state=kind in {Kind.QUARANTINE, Kind.FLOATING, Kind.UNKNOWN_AGE},
+            )
+        )
+        track(platform, verdict_of(judged(item)))
+        assert platform.tracked[-1].title == f"{emoji} {phrase} — {package}"
+        if kind is Kind.QUARANTINE:
+            assert item.severity is Severity.HIGH
+            assert "**high**" in platform.tracked[-1].body
+        if kind is Kind.FLOATING:
+            assert item.severity is Severity.MEDIUM
+            assert "**medium**" in platform.tracked[-1].body
+
+
+def test_bundle_issue_title_composes_kind_phrase_and_bundle_id(platform: FakePlatform) -> None:
+    from agent.findings import with_kind_severity
+
+    item = with_kind_severity(
+        Finding(
+            capability="capabilities/deps-outdated",
+            klass=Klass.ROUTINE,
+            severity=Severity.LOW,
+            subject=Subject(ecosystem="ecosystems/bsr", package="buf.build/connectrpc/rust"),
+            summary="bundle quarantine",
+            rationale="test",
+            kind=Kind.QUARANTINE,
+            bundle="rust-connect",
+            forbidden_state=True,
+        )
+    )
+    track(platform, verdict_of(judged(item)))
+    assert platform.tracked[0].title == "🟠 quarantine broken — bundle rust-connect"
+    assert "**high**" in platform.tracked[0].body
+
+
+def test_transitive_vuln_issue_names_how_the_package_was_brought_in(
+    platform: FakePlatform,
+) -> None:
+    item = Finding(
+        capability=CAPABILITY,
+        klass=Klass.SECURITY,
+        severity=Severity.HIGH,
+        subject=Subject(ecosystem="ecosystems/python-uv", package="h11", version="0.14.0"),
+        summary="h11 0.14.0 is affected by GHSA-xxxx",
+        rationale="Brought in through httpx; pip-audit reports GHSA-xxxx against the lock.",
+        remediation="Bump httpx so the lock picks a fixed h11, or override h11.",
+        advisory="GHSA-xxxx",
+        advisories=("GHSA-xxxx",),
+        kind=Kind.VULNERABLE,
+        via="httpx → h11",
+    )
+    track(platform, verdict_of(judged(item)))
+    body = platform.tracked[0].body
+    assert "Brought in by: httpx → h11" in body
+    assert read(body) == item.key
 
 
 def test_the_same_finding_next_week_is_not_a_second_issue(platform: FakePlatform) -> None:
@@ -167,6 +267,45 @@ def test_a_finding_that_is_gone_is_closed_with_the_evidence_that_settles_it(
     assert key == finding().key
     assert CAPABILITY in note
     assert HEAD[:12] in note
+    assert "reopens this issue" in note
+    assert "new issue" not in note
+
+
+def test_a_finding_that_returns_reopens_the_closed_issue(platform: FakePlatform) -> None:
+    """One subject — one ticket: history stays on the closed issue, not a twin."""
+    memory: dict[str, Any] = {}
+    track(platform, verdict_of(judged(finding())), memory=memory)
+    number = platform.tracked[0].number
+    track(platform, verdict_of(), memory=memory)
+    track(platform, verdict_of(), memory=memory)
+    assert not platform.tracked
+    assert len(platform.closed) == 1
+
+    again = track(platform, verdict_of(judged(finding())), memory=memory)
+
+    assert what(again) == ["reopened"]
+    assert again.raised == 0
+    assert again.numbers[finding().key] == number
+    assert len(platform.tracked) == 1
+    assert platform.tracked[0].number == number
+    assert not platform.closed
+    assert any(call.what == "reopen_issue" for call in platform.calls)
+    assert any(call.what == "raise_issue" for call in platform.calls)  # the first raise only
+    assert sum(1 for call in platform.calls if call.what == "raise_issue") == 1
+    assert any("open once more" in body for _, body in platform.notes)
+
+
+def test_reopening_does_not_consume_the_new_issue_quota(platform: FakePlatform) -> None:
+    memory: dict[str, Any] = {}
+    track(platform, verdict_of(judged(finding())), memory=memory)
+    track(platform, verdict_of(), memory=memory)
+    track(platform, verdict_of(), memory=memory)
+
+    again = track(platform, verdict_of(judged(finding())), memory=memory, limit=0)
+
+    assert what(again) == ["reopened"]
+    assert again.raised == 0
+    assert len(platform.tracked) == 1
 
 
 def test_one_complete_run_without_a_finding_is_not_yet_a_closure(platform: FakePlatform) -> None:
@@ -405,12 +544,39 @@ def test_one_ecosystem_of_a_capability_cannot_close_another(platform: FakePlatfo
 
 
 def test_a_run_stays_within_the_new_issues_it_is_allowed(platform: FakePlatform) -> None:
-    """Left for the next run rather than dropped or squeezed into one issue: a finding without its
-    own key is a finding nobody can reconcile later."""
+    """Left for the next run rather than dropped: the ceiling counts subjects, not advisories."""
     findings = verdict_of(
         judged(finding(advisory="PYSEC-2026-1")),
-        judged(finding(advisory="PYSEC-2026-2")),
-        judged(finding(advisory="PYSEC-2026-3")),
+        judged(
+            Finding(
+                capability=CAPABILITY,
+                klass=Klass.SECURITY,
+                severity=Severity.HIGH,
+                subject=Subject(ecosystem="ecosystems/python-uv", package="urllib3", version="1.0"),
+                summary="urllib3 is affected",
+                rationale="pip-audit reports it.",
+                remediation="Bump urllib3.",
+                advisory="PYSEC-2026-2",
+                kind=Kind.VULNERABLE,
+                location=Location(path="pyproject.toml", line=12),
+            )
+        ),
+        judged(
+            Finding(
+                capability=CAPABILITY,
+                klass=Klass.SECURITY,
+                severity=Severity.HIGH,
+                subject=Subject(
+                    ecosystem="ecosystems/python-uv", package="requests", version="1.0"
+                ),
+                summary="requests is affected",
+                rationale="pip-audit reports it.",
+                remediation="Bump requests.",
+                advisory="PYSEC-2026-3",
+                kind=Kind.VULNERABLE,
+                location=Location(path="pyproject.toml", line=13),
+            )
+        ),
     )
 
     record = track(platform, findings, limit=2)
@@ -418,6 +584,79 @@ def test_a_run_stays_within_the_new_issues_it_is_allowed(platform: FakePlatform)
     assert what(record) == ["raised", "raised", "deferred"]
     assert record.raised == 2
     assert "limit of 2" in record.posted[-1].detail
+
+
+def test_vulnerability_findings_take_the_new_issue_ceiling_before_routine(
+    platform: FakePlatform,
+) -> None:
+    """A small weekly budget still surfaces advisories before version drift."""
+    routine = Finding(
+        capability="capabilities/deps-outdated",
+        klass=Klass.ROUTINE,
+        severity=Severity.LOW,
+        subject=Subject(ecosystem="ecosystems/cargo", package="aaaa-first-alphabetically"),
+        summary="aaaa is behind",
+        rationale="cleared target exists",
+        kind=Kind.OUTDATED,
+    )
+    vuln = Finding(
+        capability="capabilities/deps-vuln",
+        klass=Klass.SECURITY,
+        severity=Severity.HIGH,
+        subject=Subject(ecosystem="ecosystems/cargo", package="zzzz-last-alphabetically"),
+        summary="zzzz is affected",
+        rationale="advisory",
+        advisory="GHSA-zzzz",
+        kind=Kind.VULNERABLE,
+    )
+    record = track(platform, verdict_of(judged(routine), judged(vuln)), limit=1)
+    assert record.raised == 1
+    assert what(record) == ["raised", "deferred"]
+    assert platform.tracked[0].title == "🟠 vulnerability — zzzz-last-alphabetically"
+    assert record.posted[0].key == vuln.key
+    assert record.posted[1].key == routine.key
+
+
+def test_same_subject_advisories_share_one_issue_and_one_ceiling_slot(
+    platform: FakePlatform,
+) -> None:
+    """Nine CVEs on one pin are one conversation and one weekly slot, not nine of each."""
+    merged = merge(
+        (
+            finding(advisory="PYSEC-2026-1"),
+            finding(advisory="PYSEC-2026-2"),
+            finding(advisory="PYSEC-2026-3"),
+        )
+    )
+    assert len(merged) == 1
+    assert merged[0].key.endswith(":vulnerable")
+    assert set(merged[0].advisory_ids) == {
+        "PYSEC-2026-1",
+        "PYSEC-2026-2",
+        "PYSEC-2026-3",
+    }
+    record = track(platform, verdict_of(judged(merged[0])), limit=1)
+    assert record.raised == 1
+    assert what(record) == ["raised"]
+    assert "PYSEC-2026-1" in platform.tracked[0].body
+    assert "PYSEC-2026-2" in platform.tracked[0].body
+
+
+def test_per_advisory_issues_migrate_onto_the_pin_ticket(platform: FakePlatform) -> None:
+    """Older agents keyed each CVE; the pin ticket takes over and closes the leftovers."""
+    legacy_key = f"{CAPABILITY}:ecosystems/python-uv:jinja2:PYSEC-2026-1"
+    platform.tracked.append(
+        Issue(number=1, key=legacy_key, title="old", body=f"marker {legacy_key}")
+    )
+    platform.labels[1] = (LABEL,)
+    merged = merge((finding(advisory="PYSEC-2026-1"), finding(advisory="PYSEC-2026-2")))[0]
+    assert merged.kind is Kind.VULNERABLE
+    record = track(platform, verdict_of(judged(merged)), limit=5)
+    assert record.raised == 1
+    assert any(item.what == "migrated" and item.key == legacy_key for item in record.posted)
+    assert len(platform.tracked) == 1
+    assert platform.tracked[0].key == merged.key
+    assert platform.tracked[0].key.endswith(":vulnerable")
 
 
 def test_an_issue_nobody_marked_is_not_the_agent_s_to_touch(platform: FakePlatform) -> None:
@@ -446,3 +685,69 @@ def test_a_platform_failure_costs_the_issues_and_not_the_run(platform: FakePlatf
 
     assert "token cannot see" in record.failure
     assert not record.posted
+
+
+def test_code_finding_soft_dedups_when_slug_drifts_but_path_and_symbol_match(
+    platform: FakePlatform,
+) -> None:
+    """#32 vs #56: same file+symbol, rephrased summary/slug → update the open issue, no duplicate."""
+
+    def code(*, slug: str, summary: str) -> Finding:
+        return Finding(
+            capability="capabilities/code-quality",
+            klass=Klass.ROUTINE,
+            severity=Severity.HIGH,
+            subject=Subject(path="go/echo/cmd/client/main.go"),
+            summary=summary,
+            rationale="Exit 0 on RPC failure.",
+            remediation="os.Exit(1) after logging.",
+            location=Location(path="go/echo/cmd/client/main.go", line=51),
+            symbol="main",
+            slug=slug,
+        )
+
+    first = code(
+        slug="on-echo-rpc-failure-exit-status-so-shells-see-success",
+        summary="On Echo RPC failure the client returns without a non-zero exit status.",
+    )
+    track(platform, verdict_of(judged(first)))
+    assert len(platform.tracked) == 1
+    number = platform.tracked[0].number
+
+    second = code(
+        slug="on-echo-rpc-failure-exit-so-callers-see-success",
+        summary="On Echo RPC failure the client returns from main without a non-zero exit.",
+    )
+    record = track(platform, verdict_of(judged(second)))
+    assert len(platform.tracked) == 1
+    assert platform.tracked[0].number == number
+    assert read(platform.tracked[0].body) == second.key
+    assert "raised" not in what(record)
+    assert any(item.what == "updated" for item in record.posted)
+
+
+def test_a_code_finding_title_uses_phrase_and_summary_not_path(
+    platform: FakePlatform,
+) -> None:
+    item = Finding(
+        capability="capabilities/code-quality",
+        klass=Klass.ROUTINE,
+        severity=Severity.HIGH,
+        subject=Subject(path="go/echo/cmd/client/main.go"),
+        summary=(
+            "On Echo RPC failure the client returns from main without a non-zero exit, "
+            "so callers see success."
+        ),
+        rationale="Exit 0 on RPC failure.",
+        remediation="os.Exit(1) after logging.",
+        location=Location(path="go/echo/cmd/client/main.go", line=48),
+        symbol="main",
+        slug="echo-client-nonzero-exit",
+    )
+    track(platform, verdict_of(judged(item)))
+    title = platform.tracked[0].title
+    assert title.startswith("🟠 code quality — ")
+    assert "go/echo" not in title
+    assert "code-quality" not in title
+    assert "non-zero exit" in title
+    assert "go/echo/cmd/client/main.go" in platform.tracked[0].body

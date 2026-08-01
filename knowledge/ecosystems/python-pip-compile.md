@@ -16,8 +16,8 @@ For projects where `*.in` files are the source of truth and `pip-compile` produc
 | --- | --- | --- | --- |
 | declared pins | `tool` | `requirements*.in` | reproducible |
 | resolved versions | `tool` | `requirements*.txt` | reproducible |
-| available versions | `api` | PyPI JSON | reproducible |
-| publish time | `api` | PyPI JSON | reproducible |
+| available versions | `api` | PyPI JSON; releases RSS when the full package document is too large | reproducible |
+| publish time | `api` | Per-version PyPI JSON (`/pypi/<name>/<ver>/json`) | reproducible |
 | advisories | `tool` | `pip-audit` against the locks | reproducible |
 
 ## Requirements
@@ -35,12 +35,15 @@ For projects where `*.in` files are the source of truth and `pip-compile` produc
 
 ## Evidence recipes
 
-**Declared pins.** Read exact `==` pins from each enabled `*.in` file.
+**Declared pins.** Call `list_declared_pins` with `ecosystem=ecosystems/python-pip-compile` first
+on every repository-wide outdated sweep. It reads enabled `requirements*.in` files (and `-r`
+includes). Record a fact for every package in its `packages` list — including pins that are fine —
+before querying PyPI. The agent fails the task when the census is not covered.
 
 **Candidates / Moves to.** For each direct pin, call `cleared_pin_target` with
 `ecosystem=ecosystems/python-pip-compile`, `package=<name>`, and `current` as the `.in` pin. Use its
 `target` as `Moves to` when set; put `pending` tips under Pending quarantine. Do **not** invent the
-concrete version from a narrow PyPI fetch or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target.
+concrete version from a narrow PyPI fetch or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target. When `current_cleared` is `false`, emit `kind: quarantine` with `forbidden_state` (cite `evidence_key`); when it is `null`, emit `kind: unknown_age` with `forbidden_state` — say the release date is unknown, never quarantine. Do not leave the pin silent.
 
 Routine only: security `needs_unlock` for a young fixed advisory version is unchanged.
 
@@ -60,6 +63,20 @@ pip-audit -r requirements.txt -r requirements-dev.txt
 ```
 
 Audit the locks the product enables, not an ad-hoc subset.
+
+`pip-audit` resolves every `-r` lock into **one** environment. When runtime and dev pins disagree
+on a shared package (for example `urllib3==1.26.4` in the app lock and `urllib3==2.7.0` in the
+dev lock), resolution fails before any advisory is checked. That is **not** a clean audit:
+
+1. Treat the conflict as its own finding — inconsistency between the enabled requirement sets —
+   under `capabilities/deps-outdated` or a routine note that names both pins and the resolver
+   error. Do not report `clean` for `deps-vuln`.
+2. Prefer `outcome: unverified` with reason `unexpected-shape` (or `unavailable` when the tool
+   cannot run at all) when the audit never produced an advisory list. Silence about vulns after a
+   red resolver is a defect: the check did not look.
+3. Fix path: align the shared pin in the `.in` files (usually to the cleared, higher floor both
+   sets can share), recompile both locks, re-run `pip-audit`. Only then may absence of advisories
+   mean "nothing found".
 
 ## Update procedure
 

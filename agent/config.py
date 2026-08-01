@@ -140,6 +140,18 @@ class Models:
 
     def for_role(self, role: Role) -> Binding:
         binding = self.bindings.get(role)
+        if binding is None and role in {Role.SWEEPER, Role.VULN}:
+            # Optional roles: outdated sweeps and vuln analysis may share the analyst model until a
+            # product binds a specialised one. Other roles stay strict — silent substitution would
+            # hide a missing key.
+            fallback = self.bindings.get(Role.ANALYST)
+            if fallback is not None:
+                return Binding(
+                    role=role,
+                    backend=fallback.backend,
+                    model=fallback.model,
+                    options=fallback.options,
+                )
         if binding is None:
             named = ", ".join(sorted(item.value for item in self.bindings)) or "none"
             raise ConfigError(

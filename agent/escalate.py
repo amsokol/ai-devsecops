@@ -131,7 +131,7 @@ def _capability(key: str) -> str:
 
 def _title(outcome: TaskOutcome) -> str:
     name = outcome.capability.rsplit("/", 1)[-1]
-    return f"agent: the {name} check keeps failing"
+    return f"the {name} check keeps failing"
 
 
 def _body(outcome: TaskOutcome, *, key: str, runs: int, since: str, run: str) -> str:

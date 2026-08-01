@@ -17,7 +17,13 @@ from pathlib import Path
 
 from agent.tools.ceiling import Grants
 
-MAX_OUTPUT_CHARS = 20_000
+MAX_OUTPUT_CHARS = 8_000
+"""How much of each stream a command may return to the model.
+
+A registry crawl or a verbose build routinely dumps tens of thousands of characters that the
+session never needs — and those characters cost the same as a finding. Soft-truncate here; the
+toolkit refuses to hand over anything that still exceeds the model payload ceiling.
+"""
 DEFAULT_TIMEOUT_SECONDS = 120
 STOP_GRACE_SECONDS = 5
 TRUNCATION_MARKER = "\n… truncated\n"

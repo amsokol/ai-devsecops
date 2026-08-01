@@ -79,6 +79,22 @@ When any bundle exists, report it — with an explicit empty marker when there a
 
 No member of a blocked bundle may move alone.
 
+**Cross-bundle blockers.** Bundles can depend on other bundles (NOTES may say so explicitly — e.g.
+a codegen plugin that imports another plugin's types). A dependent package in the same repository
+can also constrain a member below the cleared tip. In those cases the **shippable unit** is larger
+than one `bundle:` id: do not emit routine `outdated` for a member whose move would break a
+dependent that cannot move in the same change. Report the unmet condition; open an outdated (or
+major-unlock) issue only when every required piece can ship together, or when human approval is the
+sole remaining blocker for a major ([`grouping.md`](grouping.md)).
+
+**Findings and issues.** Every member finding that belongs to a named bundle must carry
+`bundle: <id>` in the result JSON. The agent collapses those members into one tracked finding
+keyed by the bundle id — one issue, one fix branch — for routine drift and for majors alike. Do
+not omit the field on an otherwise independent-looking outdated finding when NOTES or a marker
+named the couple; that is how a BSR plugin and a cargo crate become two tickets for one move.
+Do not open an outdated issue at all when the couple (or its blockers) cannot move yet — silence
+beats a ticket that only documents hope.
+
 ## Majors and unlock issues
 
 A routine major move inside a bundle follows the unlock rule in [`grouping.md`](grouping.md),
@@ -88,8 +104,10 @@ with one refinement:
    target — open **one** issue for the bundle, keyed by the bundle identifier. Never one issue
    per member.
 2. While any non-human blocker remains — a sibling in quarantine, no safe version, incomplete
-   unlock evidence, an explicit hold — do not open the unlock issue. Keep reporting the bundle as
-   blocked with the unmet conditions named.
+   unlock evidence, an explicit hold, **or a cross-bundle / dependency constraint that prevents
+   shipping** — do not open the unlock issue. Keep reporting the bundle as blocked with the unmet
+   conditions named. The same rule applies to routine (non-major) outdated: do not open a
+   dependency-update issue for a bump that cannot ship.
 3. After the unlock, ship the whole bundle in one change request.
 
 ## Security

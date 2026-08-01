@@ -34,11 +34,12 @@ from agent.tools import (
     OutsideRepository,
     Withheld,
     action_publish_time,
-    cleared_pin_target,
     compare_versions,
-    list_action_pins,
+    list_declared_pins,
 )
 from agent.tools.dates import quarantine
+from agent.tools.pins import packages as declared_packages
+from agent.tools.targets import ClearedPinTarget, cleared_pin_target
 
 STATEABLE_REASONS = frozenset(
     {Reason.NO_TOOLING, Reason.UNAVAILABLE, Reason.UNEXPECTED_SHAPE, Reason.NOT_PERMITTED}
@@ -53,6 +54,20 @@ every file — costs more context than the whole review it was fetched for. Wors
 document exceeds the download limit it stops being valid JSON, so a fact taken from it is downgraded
 to heuristic for a reason that has nothing to do with how trustworthy the registry is.
 """
+
+REGISTRY_TOOLS = frozenset(
+    {
+        "list_declared_pins",
+        "list_action_pins",
+        "cleared_pin_target",
+        "action_publish_time",
+        "fetch",
+    }
+)
+"""Hidden after a successful outdated prep: the pack already holds the census and cleared targets."""
+
+SCANNER_TOOLS = frozenset({"run_command", "fetch"})
+"""Hidden after a successful vuln prep: the pack already holds scanner advisories."""
 
 
 class Refused(Exception):
@@ -127,6 +142,10 @@ class Toolkit:
         self._session = session
         self._tools: TaskTools = session.for_task(task.id, root=worktree)
         self._calls: list[Call] = []
+        self._registry_tools = True
+        """When False, registry census/target tools are omitted — prep already answered them."""
+        self._scanner_tools = True
+        """When False, run_command/fetch are omitted — vuln prep already ran the scanner."""
 
     @property
     def calls(self) -> tuple[Call, ...]:
@@ -135,15 +154,31 @@ class Toolkit:
     def as_json(self) -> list[dict[str, Any]]:
         return [call.as_json() for call in self._calls]
 
+    def hide_registry_tools(self) -> None:
+        """Drop registry crawl tools after a successful outdated prep pack."""
+        self._registry_tools = False
+
+    def hide_scanner_tools(self) -> None:
+        """Drop scanner crawl tools after a successful vuln prep pack."""
+        self._scanner_tools = False
+
     def tools(self) -> tuple[Tool, ...]:
         if not self.offered:
             return ()
-        return (
+        offered = (
             self._always()
             + self._when_executing()
             + self._when_reviewing_a_change()
             + self._when_fixing()
         )
+        hidden: set[str] = set()
+        if not self._registry_tools:
+            hidden |= REGISTRY_TOOLS
+        if not self._scanner_tools:
+            hidden |= SCANNER_TOOLS
+        if not hidden:
+            return offered
+        return tuple(tool for tool in offered if tool.name not in hidden)
 
     @property
     def caveats(self) -> tuple[str, ...]:
@@ -329,13 +364,31 @@ class Toolkit:
                 run=self._compare_versions,
             ),
             Tool(
+                name="list_declared_pins",
+                description=(
+                    "Deterministic census of every direct registry pin the ecosystem's manifests "
+                    "declare. Call this first on a repository-wide deps-outdated sweep and record "
+                    "a fact for each package in `packages`, including pins that are fine. Never "
+                    "invent the pin list by reading manifests by eye. Path/git/workspace pins are "
+                    "omitted from `packages`."
+                ),
+                schema=_schema(
+                    {
+                        "ecosystem": _string(
+                            "ecosystem document id, e.g. ecosystems/cargo or "
+                            "ecosystems/github-actions"
+                        ),
+                    },
+                    required=["ecosystem"],
+                ),
+                run=self._list_declared_pins,
+            ),
+            Tool(
                 name="list_action_pins",
                 description=(
-                    "List every third-party GitHub Actions `uses:` and container `image:` pin "
-                    "under .github/workflows and .github/actions. Deterministic census — call "
-                    "this first on a deps-outdated github-actions sweep and record a fact for "
-                    "each package, including pins that are fine. Never invent the pin list by "
-                    "reading files by eye."
+                    "Alias for list_declared_pins on ecosystems/github-actions: every third-party "
+                    "`uses:` and container `image:` under .github/workflows and .github/actions. "
+                    "Prefer list_declared_pins; this name remains for older prompts."
                 ),
                 schema=_schema({}),
                 run=self._list_action_pins,
@@ -362,9 +415,12 @@ class Toolkit:
                 description=(
                     "Deterministic newest quarantine-cleared concrete target for a package pin. "
                     "Pass ecosystem document id, package, and current version. For github-actions "
-                    "also pass kind 'action' or 'image'. Returns target (Moves to), pending, and "
-                    "current_resolved / current_cleared. Routine only — never invent Moves to; "
-                    "security needs_unlock is unchanged."
+                    "also pass kind 'action' or 'image'. Returns target (Moves to), pending, "
+                    "current_resolved / current_cleared, and evidence_key for the runner-recorded "
+                    "current-cleared fact. When current_cleared is false, emit quarantine with "
+                    "forbidden_state; when null, emit unknown_age with forbidden_state (release "
+                    "date unknown — never call that quarantine). Routine only — never invent "
+                    "Moves to; security needs_unlock is unchanged."
                 ),
                 schema=_schema(
                     {
@@ -506,7 +562,19 @@ class Toolkit:
             self._record_call("read_file", Origin.TOOL, path, ok=False, detail=str(error))
             raise Refused(f"{path}: {error}") from None
         call = self._record_call("read_file", Origin.TOOL, path, ok=True)
-        return {"call": call.id, "path": path, "text": text}
+        delivered, size = _deliverable(text)
+        if delivered is None:
+            return {
+                "call": call.id,
+                "path": path,
+                "chars": size,
+                "not_delivered": (
+                    f"the file is {size} chars, over the {MODEL_PAYLOAD_CHARS} this tool returns. "
+                    "Use search_text, read a smaller path, or ask for the section you need."
+                ),
+                "head": text[:400],
+            }
+        return {"call": call.id, "path": path, "text": delivered}
 
     def _search_text(self, arguments: dict[str, Any]) -> dict[str, Any]:
         pattern = _required(arguments, "pattern")
@@ -544,13 +612,30 @@ class Toolkit:
             ok=result.succeeded,
             detail="" if result.succeeded else f"exit {result.exit_code}",
         )
-        return {
+        stdout, stdout_n = _deliverable(result.stdout)
+        stderr, stderr_n = _deliverable(result.stderr)
+        payload: dict[str, Any] = {
             "call": call.id,
             "exit_code": result.exit_code,
             "timed_out": result.timed_out,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
         }
+        if stdout is None or stderr is None:
+            # Soft truncation in CommandRunner already cut each stream; if either is still over the
+            # model ceiling, refuse rather than put a half-read crawl in the context window.
+            size = max(stdout_n, stderr_n)
+            payload["not_delivered"] = (
+                f"command output is {size} chars, over the {MODEL_PAYLOAD_CHARS} this tool "
+                "returns. Narrow the command (flags, path, one package) or read a smaller file; "
+                "do not re-run the same command hoping for a shorter answer."
+            )
+            payload["stdout_chars"] = stdout_n
+            payload["stderr_chars"] = stderr_n
+            payload["stdout_head"] = result.stdout[:400]
+            payload["stderr_head"] = result.stderr[:400]
+            return payload
+        payload["stdout"] = stdout
+        payload["stderr"] = stderr
+        return payload
 
     # Mutation --------------------------------------------------------------------
 
@@ -663,19 +748,41 @@ class Toolkit:
             "step": comparison.step.value if comparison.step else None,
         }
 
+    def _list_declared_pins(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        ecosystem = _required(arguments, "ecosystem")
+        try:
+            pins = list_declared_pins(self._tools.files.root, ecosystem)
+        except ValueError as error:
+            call = self._record_call("list_declared_pins", Origin.TOOL, str(error), ok=False)
+            return {"call": call.id, "error": str(error), "pins": [], "packages": []}
+        names = sorted(declared_packages(pins))
+        call = self._record_call(
+            "list_declared_pins",
+            Origin.TOOL,
+            f"{len(names)} package(s) for {ecosystem}",
+            ok=True,
+        )
+        return {
+            "call": call.id,
+            "ecosystem": ecosystem,
+            "pins": [pin.as_json() for pin in pins],
+            "packages": names,
+        }
+
     def _list_action_pins(self, arguments: dict[str, Any]) -> dict[str, Any]:
         del arguments
-        pins = list_action_pins(self._tools.files.root)
+        pins = list_declared_pins(self._tools.files.root, "ecosystems/github-actions")
+        names = sorted(declared_packages(pins))
         call = self._record_call(
             "list_action_pins",
             Origin.TOOL,
-            f"{len(pins)} pin(s) under .github/",
+            f"{len(names)} pin(s) under .github/",
             ok=True,
         )
         return {
             "call": call.id,
             "pins": [pin.as_json() for pin in pins],
-            "packages": sorted({pin.package for pin in pins}),
+            "packages": names,
         }
 
     def _action_publish_time(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -706,38 +813,65 @@ class Toolkit:
         def run_command(command: list[str]) -> Any:
             return self._tools.commands.run(tuple(command))
 
-        try:
-            answer = cleared_pin_target(
-                self._tools.http,
-                ecosystem=ecosystem,
-                package=package,
-                current=current,
-                kind=kind,
-                days=self.quarantine_days,
-                now=self.now,
-                run_command=run_command,
+        memo_key = (ecosystem, package, current, kind)
+        with self._session.pin_lock:
+            remembered = self._session.pin_targets.get(memo_key)
+            if isinstance(remembered, ClearedPinTarget):
+                answer = remembered
+                source = f"{ecosystem}:{package}@{current}→{answer.target or 'none'} (cached)"
+                call = self._record_call("cleared_pin_target", Origin.API, source, ok=True)
+            else:
+                try:
+                    answer = cleared_pin_target(
+                        self._tools.http,
+                        ecosystem=ecosystem,
+                        package=package,
+                        current=current,
+                        kind=kind,
+                        days=self.quarantine_days,
+                        now=self.now,
+                        run_command=run_command,
+                    )
+                except HostNotPermitted as error:
+                    self._record_call(
+                        "cleared_pin_target",
+                        Origin.API,
+                        f"{ecosystem}:{package}@{current}",
+                        ok=False,
+                        detail=str(error),
+                    )
+                    raise Refused(str(error)) from None
+                except (OSError, ValueError, urllib.error.HTTPError) as error:
+                    self._record_call(
+                        "cleared_pin_target",
+                        Origin.API,
+                        f"{ecosystem}:{package}@{current}",
+                        ok=False,
+                        detail=str(error),
+                    )
+                    raise Refused(str(error)) from None
+                self._session.pin_targets[memo_key] = answer
+                source = f"{ecosystem}:{package}@{current}→{answer.target or 'none'}"
+                call = self._record_call("cleared_pin_target", Origin.API, source, ok=True)
+        subject = Subject(
+            ecosystem=ecosystem,
+            package=package,
+            version=answer.current_resolved or current,
+        )
+        # Quarantine arithmetic is agent-owned: record the current-cleared fact here so the
+        # executor gate does not depend on the model retyping the tool answer.
+        stored = self._session.evidence.add(
+            Evidence.verified(
+                question=Question.CURRENT_CLEARED,
+                subject=subject,
+                value=answer.current_cleared,
+                origin=Origin.API,
+                source=source,
+                observed_at=self.now,
+                recipe=f"{self.task.capability}@cleared_pin_target",
             )
-        except HostNotPermitted as error:
-            self._record_call(
-                "cleared_pin_target",
-                Origin.API,
-                f"{ecosystem}:{package}@{current}",
-                ok=False,
-                detail=str(error),
-            )
-            raise Refused(str(error)) from None
-        except (OSError, ValueError, urllib.error.HTTPError) as error:
-            self._record_call(
-                "cleared_pin_target",
-                Origin.API,
-                f"{ecosystem}:{package}@{current}",
-                ok=False,
-                detail=str(error),
-            )
-            raise Refused(str(error)) from None
-        source = f"{ecosystem}:{package}@{current}→{answer.target or 'none'}"
-        call = self._record_call("cleared_pin_target", Origin.API, source, ok=True)
-        return {"call": call.id} | answer.as_json()
+        )
+        return {"call": call.id, "evidence_key": stored.key} | answer.as_json()
 
     def _check_quarantine(self, arguments: dict[str, Any]) -> dict[str, Any]:
         published = _timestamp(_required(arguments, "published_at"))
@@ -774,6 +908,11 @@ class Toolkit:
 
     def _record_fact(self, arguments: dict[str, Any]) -> dict[str, Any]:
         question = _question(arguments)
+        if question == Question.CURRENT_CLEARED:
+            raise Refused(
+                "current-cleared is recorded by cleared_pin_target; cite that evidence_key — "
+                "do not re-record the tool answer as a fact"
+            )
         subject = self._subject(arguments.get("subject"))
         cited = self._cited(arguments.get("calls"), succeeded=True)
         if "value" not in arguments or arguments["value"] is None:

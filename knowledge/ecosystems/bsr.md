@@ -16,9 +16,9 @@ proven and assumed matters most.
 | --- | --- | --- | --- |
 | declared pins | `tool` | `buf.yaml`, `buf.lock`, `buf.gen.*.yaml` | reproducible |
 | module labels | `tool` | `buf registry` CLI | reproducible |
-| remote plugin candidates | `tool` | plugin label list, else GitHub Releases for `owner/name` | reproducible / heuristic dates from Release |
+| remote plugin candidates | `api` / `web` | `bufbuild/plugins` catalog (versions + commit date); else `source_url` GitHub Release; else path heuristic | reproducible (catalog) / heuristic (Release) |
 | remote plugin tag exists | `tool` | resolve probe, see below | reproducible |
-| publish time | `web` | label timestamps, else GitHub Release `published_at` | heuristic when from GitHub |
+| publish time | `tool` / `api` | module label `create_time`; plugin catalog commit; else Release | reproducible / heuristic |
 | advisories | `none` | — | — |
 
 There is no audit tool for this registry. Advisories are unverified; treat these pins as
@@ -44,15 +44,27 @@ Run the comment pass first: this ecosystem is where holds and bundles appear mos
 
 ## Evidence recipes
 
+**Declared pins.** Call `list_declared_pins` with `ecosystem=ecosystems/bsr` first on every
+repository-wide outdated sweep. It reads `buf.yaml` `deps:` and `buf.gen*.yaml` `plugins[].remote`,
+normalized to `buf.build/owner/name`. Record a fact for every package in its `packages` list —
+including pins that are fine — before querying the registry. The agent fails the task when the
+census is not covered.
+
 **Candidates / Moves to.** For each module dependency **and** each remote plugin pin, call
 `cleared_pin_target` with `ecosystem=ecosystems/bsr`, `package=buf.build/owner/name` (or
 `owner/name`), and `current` as the pinned label. The tool lists module labels, then plugin labels;
 when both fail or the plugin label list is empty (common for protoc plugins such as
-`buf.build/anthropics/buffa`), it falls back to GitHub Releases for `owner/name` and applies
-quarantine to those tags. Use its `target` as `Moves to` when set; put `pending` tips under Pending
-quarantine. Do **not** invent the concrete label from a narrow `buf` listing or by eye, and
+`buf.build/connectrpc/rust`), it reads the Buf-managed catalog at `bufbuild/plugins`
+(`plugins/<owner>/<name>/<version>/buf.plugin.yaml`): catalog commit date first, then GitHub
+Release via that yaml's `source_url` (not a guessed `owner/name` from the BSR path). Use its
+`target` as `Moves to` when set; put `pending` tips under Pending quarantine. Do **not** invent the
+concrete label from a narrow `buf` listing or by eye, and
 do **not** re-run `buf registry …` / HTML fetches to second-guess the tool after it answered. When
-`buf` and GitHub are both unavailable the tool returns `target=null` — record a gap; do not invent.
+`current_cleared` is `false`, emit `kind: quarantine` with `forbidden_state` (cite `evidence_key`).
+When it is `null`, emit `kind: unknown_age` with `forbidden_state` — say the release date is unknown;
+do not call that quarantine. When
+`buf`, the catalog, and GitHub are all unavailable the tool returns `target=null` — still
+`unknown_age` for the pin in use; do not invent.
 
 `buf registry module|plugin label list … --format json` remains the underlying listing inside the
 tool. Ignore branch-like labels unless the pin itself uses one.

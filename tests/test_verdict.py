@@ -42,6 +42,8 @@ def dependency(
         rationale="The advisory covers the pinned version.",
         evidence=evidence,
         advisory=advisory,
+        advisories=(advisory,) if advisory else (),
+        kind=Kind.VULNERABLE,
     )
 
 
@@ -60,7 +62,12 @@ def pin(
     )
 
 
-def code(*, line: int, summary: str = "Unchecked index access can panic.") -> Finding:
+def code(
+    *,
+    line: int,
+    summary: str = "Unchecked index access can panic.",
+    slug: str = "unchecked-index-access",
+) -> Finding:
     return Finding(
         capability="capabilities/code-quality",
         klass=Klass.ROUTINE,
@@ -70,6 +77,7 @@ def code(*, line: int, summary: str = "Unchecked index access can panic.") -> Fi
         rationale="The slice may be shorter than the index.",
         location=Location(path="src/api.py", line=line),
         symbol="handle",
+        slug=slug,
     )
 
 
@@ -82,7 +90,8 @@ def clean(identifier: str) -> TaskOutcome:
 def test_a_key_ignores_what_drifts_between_runs() -> None:
     assert dependency(version="0.28.1").key == dependency(version="0.29.0").key
     assert code(line=10).key == code(line=99).key
-    assert code(line=10).key != code(line=10, summary="Something else entirely.").key
+    assert code(line=10).key == code(line=10, summary="Something else entirely.").key
+    assert code(line=10).key != code(line=10, slug="different-defect").key
 
 
 def test_a_pin_keeps_its_key_when_the_wording_changes() -> None:
@@ -115,6 +124,21 @@ def test_one_problem_found_twice_is_judged_by_the_stricter_verdict() -> None:
     assert len(merged) == 1
     assert merged[0].severity is Severity.CRITICAL
     assert merged[0].evidence == (TOOL,)
+
+
+def test_every_advisory_on_one_pin_becomes_one_finding() -> None:
+    """The tracker and the fix branch see one conversation; advisory ids stay in the body."""
+    merged = merge(
+        (
+            dependency(advisory="GHSA-aaaa"),
+            dependency(advisory="GHSA-bbbb", severity=Severity.CRITICAL),
+            dependency(advisory="GHSA-cccc"),
+        )
+    )
+    assert len(merged) == 1
+    assert merged[0].key.endswith(":vulnerable")
+    assert set(merged[0].advisory_ids) == {"GHSA-aaaa", "GHSA-bbbb", "GHSA-cccc"}
+    assert merged[0].severity is Severity.CRITICAL
 
 
 def test_a_merged_finding_still_answers_to_the_key_it_was_merged_under() -> None:

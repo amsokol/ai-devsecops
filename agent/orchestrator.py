@@ -20,6 +20,7 @@ from agent.answer import Aftermath, Answered, answer, deliver, failure_on_issue,
 from agent.backends.port import Backend, Budget
 from agent.backends.select import Roster
 from agent.budget import Ledger, RunBudget
+from agent.bundles import collapse
 from agent.config import Config, Models
 from agent.containment import Checkout
 from agent.coverage import Coverage, previous
@@ -29,7 +30,7 @@ from agent.escalate import Escalation, weigh
 from agent.executor import Executed, execute
 from agent.findings import Finding, merge
 from agent.intent import Course, Read, classify, narrow
-from agent.issues import LABEL, Tracking, track_findings
+from agent.issues import Tracking, open_tracked, track_findings
 from agent.library import Library
 from agent.lifecycle import notice_open_prs, reclaim_abandoned
 from agent.manifest import Manifest
@@ -313,6 +314,7 @@ def run(
         "task_steps": config.steps_limit,
         "max_parallel": spend.tasks_at_once,
         "run_tokens": spend.tokens_per_run,
+        "fixer_token_reserve": spend.fixer_token_reserve,
         "kind": kind,
     }
 
@@ -397,7 +399,13 @@ def run(
     # One event loop for execution and shutdown alike. A backend that holds a subprocess cannot be
     # closed from a second loop: the process was awaited in the first one, and closing it elsewhere
     # fails with a future attached to another loop.
-    ledger = Ledger(RunBudget(max_parallel=spend.tasks_at_once, tokens=spend.tokens_per_run))
+    ledger = Ledger(
+        RunBudget(
+            max_parallel=spend.tasks_at_once,
+            tokens=spend.tokens_per_run,
+            fixer_reserve=spend.fixer_token_reserve,
+        )
+    )
 
     proposed: tuple[str, ...] = ()
     open_proposals: dict[str, Proposal] = {}
@@ -422,7 +430,7 @@ def run(
             # waits for approval, which is the safe direction: the finding is reported as waiting
             # for one more week rather than changed on nobody's say-so.
             try:
-                tracked = speaker.issues(label=LABEL)
+                tracked = open_tracked(speaker)
                 approvals = granted(tracked)
             except ScmError as error:
                 manifest.warnings.append(
@@ -1333,7 +1341,7 @@ def _conclude(
             )
 
     judged = judge(
-        merge(tuple(findings)),
+        collapse(merge(tuple(findings))),
         rules=rules,
         reliabilities=session.evidence.reliabilities(),
     )

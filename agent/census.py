@@ -1,4 +1,4 @@
-"""Whether a deps-outdated github-actions sweep examined every pin the census found."""
+"""Whether a deps-outdated sweep examined every pin the census found."""
 
 from __future__ import annotations
 
@@ -7,34 +7,35 @@ from pathlib import Path
 from agent.coverage import Coverage
 from agent.domain import PlannedTask
 from agent.evidence import Evidence
-from agent.tools.actions import list_action_pins, packages
+from agent.tools.pins import list_declared_pins, packages
 
-ECOSYSTEM = "ecosystems/github-actions"
 CAPABILITY = "capabilities/deps-outdated"
 NAMED = 8
 COMMITTER = "committer.date"
+GITHUB_ACTIONS = "ecosystems/github-actions"
 
 
-def incomplete_action_sweep(
+def incomplete_pin_sweep(
     root: Path,
     task: PlannedTask,
     records: tuple[Evidence, ...] | list[Evidence],
 ) -> str | None:
     """Why this task's result is incomplete, or `None` when the census was covered.
 
-    Only github-actions outdated sweeps are checked: that is the census tool we have. A short
-    examined set against a non-empty census fails the task rather than publishing a partial list.
-    Also refuses publish-time facts that cite a committer date — that clock predates the Release and
-    falsely clears quarantine.
+    Every listed ecosystem with a deterministic census fails rather than publishing a partial
+    finding list. GitHub Actions also refuses publish-time facts that cite a committer date.
     """
-    if task.capability != CAPABILITY or task.ecosystem != ECOSYSTEM:
+    if task.capability != CAPABILITY or not task.ecosystem:
         return None
-    if reason := _committer_clock(records):
+    if task.ecosystem == GITHUB_ACTIONS and (reason := _committer_clock(records)):
         return reason
-    census = packages(list_action_pins(root))
+    try:
+        census = packages(list_declared_pins(root, task.ecosystem))
+    except ValueError:
+        return None
     if not census:
         return None
-    bucket = f"{CAPABILITY}:{ECOSYSTEM}"
+    bucket = f"{CAPABILITY}:{task.ecosystem}"
     examined = Coverage.of(records).examined.get(bucket, frozenset())
     missing = census - examined
     if not missing:
@@ -42,10 +43,20 @@ def incomplete_action_sweep(
     named = ", ".join(f"`{name}`" for name in sorted(missing)[:NAMED])
     more = f" (+{len(missing) - NAMED} more)" if len(missing) > NAMED else ""
     return (
-        f"list_action_pins found {len(census)} package(s) under .github/ but this run only "
-        f"recorded facts for {len(examined)}; not examined: {named}{more}. Call list_action_pins "
-        "and record a fact for every pin — including those that are fine — before finishing"
+        f"list_declared_pins found {len(census)} package(s) for {task.ecosystem} but this run "
+        f"only recorded facts for {len(examined)}; not examined: {named}{more}. Call "
+        "list_declared_pins and record a fact for every pin — including those that are fine — "
+        "before finishing"
     )
+
+
+def incomplete_action_sweep(
+    root: Path,
+    task: PlannedTask,
+    records: tuple[Evidence, ...] | list[Evidence],
+) -> str | None:
+    """Compatibility alias for the github-actions incomplete-sweep gate."""
+    return incomplete_pin_sweep(root, task, records)
 
 
 def _committer_clock(records: tuple[Evidence, ...] | list[Evidence]) -> str | None:

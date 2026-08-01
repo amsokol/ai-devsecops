@@ -52,7 +52,26 @@ def test_a_well_formed_result_is_read(tmp_path: Path) -> None:
     assert only.klass is Klass.SECURITY
     assert only.severity is Severity.HIGH
     assert only.capability == CAPABILITY
-    assert only.key == "capabilities/deps-vuln:ecosystems/python-uv:httpx:GHSA-xxxx"
+    assert only.key == "capabilities/deps-vuln:ecosystems/python-uv:httpx:vulnerable"
+
+
+def test_via_records_how_a_transitive_package_entered(tmp_path: Path) -> None:
+    path = write(
+        tmp_path / "r.json",
+        {
+            "outcome": "findings",
+            "findings": [
+                finding(
+                    subject={"package": "h11", "version": "0.14.0"},
+                    summary="h11 is affected",
+                    via="httpx → h11",
+                )
+            ],
+        },
+    )
+    only = read(path).findings[0]
+    assert only.via == "httpx → h11"
+    assert only.subject.package == "h11"
 
 
 def test_a_finding_about_a_package_must_name_its_kind(tmp_path: Path) -> None:
@@ -174,3 +193,55 @@ def test_a_nonsense_line_number_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(InvalidResult, match="positive integer"):
         read(path)
+
+
+def test_a_path_finding_must_name_a_stable_slug(tmp_path: Path) -> None:
+    path = write(
+        tmp_path / "r.json",
+        {
+            "outcome": "findings",
+            "findings": [
+                {
+                    "class": "routine",
+                    "severity": "high",
+                    "subject": {"path": "go/echo/cmd/client/main.go"},
+                    "summary": "On Echo RPC failure the client exits zero.",
+                    "rationale": "Callers see success.",
+                    "evidence": [KEY],
+                    "symbol": "main",
+                    "location": {"path": "go/echo/cmd/client/main.go", "line": 51},
+                }
+            ],
+        },
+    )
+    with pytest.raises(InvalidResult, match="stable `slug`"):
+        read(path)
+
+
+def test_path_finding_key_uses_slug_not_summary(tmp_path: Path) -> None:
+    base = {
+        "class": "routine",
+        "severity": "high",
+        "subject": {"path": "go/echo/cmd/client/main.go"},
+        "slug": "echo-rpc-nonzero-exit",
+        "rationale": "Callers see success.",
+        "evidence": [KEY],
+        "symbol": "main",
+        "location": {"path": "go/echo/cmd/client/main.go", "line": 51},
+    }
+    first = write(
+        tmp_path / "a.json",
+        {
+            "outcome": "findings",
+            "findings": [base | {"summary": "On failure the client returns without a non-zero exit."}],
+        },
+    )
+    second = write(
+        tmp_path / "b.json",
+        {
+            "outcome": "findings",
+            "findings": [base | {"summary": "On failure callers see success because exit is zero."}],
+        },
+    )
+    assert read(first).findings[0].key == read(second).findings[0].key
+    assert "echo-rpc-nonzero-exit" in read(first).findings[0].key

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from agent.domain import Outcome, Reason, RunResult
 from agent.evidence import Reliability, Subject
-from agent.findings import Action, Finding, Klass, Location, Severity
+from agent.findings import Action, Finding, Kind, Klass, Location, Severity
 from agent.publish import Publication, publish_review
 from agent.repo import ChangeView, Repository
 from agent.scm import GitHub, Identity, ScmError, Stance, credential
@@ -36,6 +36,8 @@ def finding(*, advisory: str = "PYSEC-2026-1", line: int | None = None) -> Findi
         evidence=("advisories|ecosystems/python-uv|jinja2|3.1.3|",),
         remediation="Bump jinja2 to 3.1.6.",
         advisory=advisory,
+        advisories=(advisory,),
+        kind=Kind.VULNERABLE,
         location=Location(path="pyproject.toml", line=line) if line else None,
     )
 

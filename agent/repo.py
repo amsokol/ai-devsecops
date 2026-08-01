@@ -70,11 +70,36 @@ class Repository:
             return False
         return True
 
+    def worktrees_on(self, branch: str) -> tuple[Path, ...]:
+        """Paths of linked checkouts whose HEAD is on `branch` (porcelain `git worktree list`).
+
+        The main checkout is included when it is on that branch. Reclaim uses this to detach
+        abandoned fix worktrees before `branch -D`; without that, a crashed run leaves a tip that
+        blocks every later prepare.
+        """
+        want = branch if branch.startswith("refs/heads/") else f"refs/heads/{branch}"
+        listed = _git(self.path, "worktree", "list", "--porcelain")
+        found: list[Path] = []
+        path: Path | None = None
+        for line in listed.splitlines():
+            if line.startswith("worktree "):
+                path = Path(line[len("worktree ") :])
+            elif line.startswith("branch ") and path is not None:
+                if line[len("branch ") :] == want:
+                    found.append(path)
+                path = None
+            elif line == "" or line.startswith("HEAD ") or line == "detached":
+                if line == "" or line == "detached":
+                    path = None
+        return tuple(found)
+
     def delete_branch(self, name: str) -> None:
         """Drop a local abandoned fix branch so the next prepare starts from the default tip.
 
-        Refuses when the checkout is currently on that branch — reclaim always runs from the default
-        (or detached) HEAD of a maintenance checkout.
+        Linked worktrees on that branch are removed first: a maintain run that died mid-fix leaves
+        them behind, and `git branch -D` then fails with "used by worktree", which would permanently
+        defer the finding. Refuses when the *main* checkout is currently on that branch — reclaim
+        always runs from the default (or detached) HEAD of a maintenance checkout.
         """
         if not self.has_branch(name):
             return
@@ -83,6 +108,15 @@ class Repository:
             raise ConfigError(
                 f"cannot delete branch {name!r} while the checkout is on it; move off it first"
             )
+        main = self.path.resolve()
+        for tree in self.worktrees_on(name):
+            if tree.resolve() == main:
+                continue
+            _git(self.path, "worktree", "remove", "--force", str(tree))
+        try:
+            _git(self.path, "worktree", "prune")
+        except ConfigError:
+            pass
         _git(self.path, "branch", "-D", name)
 
     @property

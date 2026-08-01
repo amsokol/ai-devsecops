@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from agent.absence import Absences
 from agent.backends.fake import FakeBackend, Scripted
@@ -33,6 +34,7 @@ from agent.repo import Repository
 from agent.scm import marker
 from agent.scm.fake import FakePlatform
 from agent.scm.port import Comment, Issue
+from agent.tools.targets import ClearedPinTarget
 from agent.unlock import Approval, granted, held, read, stamped, waiting
 from agent.verdict import Judged, TaskOutcome, Verdict
 from agent.wake import Wake
@@ -44,6 +46,41 @@ SUMMARY = "jinja2 is a major line behind."
 KEY = "capabilities/deps-outdated:ecosystems/python-uv:jinja2:outdated"
 VERIFY = ("uv", "--version")
 APPROVAL = Approval(by=PERSON, comment=COMMENT, at="2026-07-25")
+
+
+@pytest.fixture(autouse=True)
+def _prep_treats_jinja2_as_cleared(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Outdated prep must not turn this major-behind pin into a quarantine gate failure.
+
+    Live registry arithmetic for 2.11.3 can leave current_cleared unset; these tests are about
+    unlock holds, not quarantine of the pin in use.
+    """
+
+    def fake_cleared(
+        _http: object,
+        *,
+        ecosystem: str,
+        package: str,
+        current: str,
+        days: int,
+        now: datetime,
+        kind: str = "",
+        run_command: object = None,
+    ) -> ClearedPinTarget:
+        pin = current.split("==")[-1] if "==" in current else current
+        return ClearedPinTarget(
+            ecosystem=ecosystem,
+            kind=kind,
+            package=package,
+            current=current,
+            line="2",
+            current_resolved=pin,
+            current_cleared=True,
+            target="3.1.4",
+            pending=(),
+        )
+
+    monkeypatch.setattr("agent.outdated_prep.cleared_pin_target", fake_cleared)
 
 
 def a_finding(
@@ -485,19 +522,51 @@ def finder(intent: str = "unlock", *, fixes: bool = True) -> FakeBackend:
     def act(brief: Brief) -> None:
         if brief.task.role is Role.FIXER and not fixes:
             return
-        if brief.task.role is Role.ANALYST:
-            call = brief.toolkit.call("run_command", {"command": list(VERIFY)})
-            fact = brief.toolkit.call(
-                "record_fact",
+        if brief.task.role in {Role.ANALYST, Role.SWEEPER, Role.VULN}:
+            offered = {tool.name for tool in brief.toolkit.tools()}
+            # After outdated prep the census tools are hidden — evidence is already on the session.
+            if "list_declared_pins" in offered:
+                census = brief.toolkit.call(
+                    "list_declared_pins", {"ecosystem": "ecosystems/python-uv"}
+                )
+                for package in census["packages"]:
+                    brief.toolkit.call(
+                        "record_fact",
+                        {
+                            "question": "declared-pin",
+                            "subject": {"package": package},
+                            "value": True,
+                            "calls": [census["call"]],
+                        },
+                    )
+            fact_key: str | None = None
+            known = brief.toolkit.call(
+                "known_fact",
                 {
-                    "question": "latest-version",
+                    "question": "declared-pin",
                     "subject": {"ecosystem": "ecosystems/python-uv", "package": "jinja2"},
-                    "value": "3.1.4",
-                    "calls": [call["call"]],
                 },
             )
+            if known.get("found"):
+                fact_key = known["key"]
+            elif "run_command" in offered:
+                call = brief.toolkit.call("run_command", {"command": list(VERIFY)})
+                fact = brief.toolkit.call(
+                    "record_fact",
+                    {
+                        "question": "latest-version",
+                        "subject": {"ecosystem": "ecosystems/python-uv", "package": "jinja2"},
+                        "value": "3.1.4",
+                        "calls": [call["call"]],
+                    },
+                )
+                fact_key = fact["key"]
+            else:
+                raise AssertionError(
+                    f"no evidence path: offered={sorted(offered)} known={known}"
+                )
             brief.result_path.parent.mkdir(parents=True, exist_ok=True)
-            brief.result_path.write_text(json.dumps(_reported(fact["key"])), encoding="utf-8")
+            brief.result_path.write_text(json.dumps(_reported(fact_key)), encoding="utf-8")
         elif brief.task.role is Role.FIXER:
             brief.toolkit.call(
                 "edit_file",

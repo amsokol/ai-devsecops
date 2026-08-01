@@ -92,7 +92,10 @@ def test_plan_only_review_succeeds_and_records_a_manifest(
     manifest = json.loads(next(run_dir.glob("*/manifest.json")).read_text(encoding="utf-8"))
     assert manifest["result"] == "planned"
     assert [task["id"] for task in manifest["tasks"]] == ["code-quality", "code-vuln"]
-    assert manifest["roles"] == [{"role": "analyst", "backend": "fake", "model": "composer-2.5"}]
+    assert manifest["roles"] == [
+        {"role": "analyst", "backend": "fake", "model": "composer-2.5"},
+        {"role": "vuln", "backend": "fake", "model": "composer-2.5"},
+    ]
     assert "pinned" not in manifest["library"]
     assert manifest["library"]["version"]
 
@@ -136,7 +139,7 @@ def test_a_maintenance_run_carries_a_fix_phase_even_when_there_is_nothing_to_fix
     code = main(["maintain", *arguments(git_repo, library_root, overlay_root, run_dir, config_dir)])
     assert code == int(ExitCode.OK)
     manifest = json.loads(next(run_dir.glob("*/manifest.json")).read_text(encoding="utf-8"))
-    assert [role["role"] for role in manifest["roles"]] == ["analyst", "fixer"]
+    assert [role["role"] for role in manifest["roles"]] == ["analyst", "fixer", "sweeper", "vuln"]
     assert manifest["remediation"] == {"jobs": [], "deferred": [], "awaiting_review": []}
     assert manifest["fixes"] == []
 
@@ -540,7 +543,8 @@ def test_switching_provider_is_an_edit_in_the_overlay_and_nothing_else(
     assert code == int(ExitCode.OK)
     manifest = json.loads(next(run_dir.glob("*/manifest.json")).read_text(encoding="utf-8"))
     assert manifest["roles"] == [
-        {"role": "analyst", "backend": "fake", "model": "another-provider"}
+        {"role": "analyst", "backend": "fake", "model": "another-provider"},
+        {"role": "vuln", "backend": "fake", "model": "another-provider"},
     ]
     assert manifest["budget"]["run_tokens"] == 24_000_000
 

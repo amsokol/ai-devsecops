@@ -22,6 +22,7 @@ tasks:
     when: source-changed
 
   - capability: capabilities/code-vuln
+    role: vuln
     when: source-or-workflows-changed
 
   - capability: capabilities/deps-outdated
@@ -29,5 +30,6 @@ tasks:
     per_ecosystem: true
 
   - capability: capabilities/deps-vuln
+    role: vuln
     when: ecosystem-pins-changed
     per_ecosystem: true

@@ -399,3 +399,109 @@ def test_the_ledger_records_every_call_for_the_manifest(tmp_path: Path) -> None:
 
     assert [entry["tool"] for entry in ledger] == ["read_file", "compare_versions"]
     assert all(entry["at"] == MOMENT.isoformat() for entry in ledger)
+
+
+def test_cleared_pin_target_records_current_cleared_evidence(tmp_path: Path) -> None:
+    """Quarantine arithmetic is agent-owned: the tool writes current-cleared evidence itself."""
+    from unittest.mock import patch
+
+    from agent.evidence import Question
+    from agent.tools.targets import ClearedPinTarget
+
+    canned = ClearedPinTarget(
+        ecosystem="ecosystems/github-actions",
+        kind="action",
+        package="actions/checkout",
+        current="v7",
+        line="7",
+        current_resolved="v7.0.1",
+        current_cleared=False,
+        target="v7.0.0",
+        pending=("v7.0.1",),
+    )
+    kit = toolkit(tmp_path, hosts=frozenset({"api.github.com"}))
+
+    with patch("agent.toolkit.cleared_pin_target", return_value=canned) as probe:
+        answer = kit.call(
+            "cleared_pin_target",
+            {
+                "ecosystem": "ecosystems/github-actions",
+                "kind": "action",
+                "package": "actions/checkout",
+                "current": "v7",
+            },
+        )
+        again = kit.call(
+            "cleared_pin_target",
+            {
+                "ecosystem": "ecosystems/github-actions",
+                "kind": "action",
+                "package": "actions/checkout",
+                "current": "v7",
+            },
+        )
+
+    assert probe.call_count == 1
+    assert answer["current_cleared"] is False
+    assert answer["evidence_key"].startswith("current-cleared|")
+    assert again["target"] == answer["target"]
+    assert again["evidence_key"] == answer["evidence_key"]
+    recorded = [item for item in kit._session.evidence if item.question == Question.CURRENT_CLEARED]
+    assert len(recorded) == 1
+    assert recorded[0].value is False
+    assert recorded[0].key == answer["evidence_key"]
+    assert (
+        kit._session.pin_targets[("ecosystems/github-actions", "actions/checkout", "v7", "action")]
+        is canned
+    )
+    assert any("(cached)" in call.source for call in kit.calls)
+
+
+def test_run_command_refuses_oversized_streams_instead_of_dumping_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Soft truncation leaves room; the model ceiling must refuse rather than dump a crawl."""
+    from agent import toolkit as toolkit_module
+    from agent.tools.commands import CommandResult
+
+    monkeypatch.setattr(toolkit_module, "MODEL_PAYLOAD_CHARS", 50)
+    kit = toolkit(tmp_path, binaries=frozenset({"echo"}))
+
+    def huge(_command: tuple[str, ...], **_kwargs: object) -> CommandResult:
+        return CommandResult(
+            command=("echo", "x"),
+            exit_code=0,
+            stdout="x" * 80,
+            stderr="",
+            timed_out=False,
+        )
+
+    monkeypatch.setattr(type(kit._tools.commands), "run", lambda self, *a, **k: huge(*a, **k))
+    answer = kit.call("run_command", {"command": ["echo", "x"]})
+    assert "not_delivered" in answer
+    assert "stdout" not in answer
+    assert answer["stdout_chars"] == 80
+
+
+def test_maintain_deps_outdated_is_planned_for_the_sweeper_role() -> None:
+    from agent.config import Config
+    from agent.domain import Trigger
+
+    scenario = Config.load().scenario_for(Trigger.MAINTAIN_REQUESTED)
+    outdated = next(rule for rule in scenario.tasks if rule.capability.endswith("deps-outdated"))
+    assert outdated.role is Role.SWEEPER
+
+
+def test_vuln_capabilities_are_planned_for_the_vuln_role() -> None:
+    from agent.config import Config
+    from agent.domain import Trigger
+
+    scenario = Config.load().scenario_for(Trigger.MAINTAIN_REQUESTED)
+    roles = {
+        rule.capability: rule.role
+        for rule in scenario.tasks
+        if rule.capability.endswith(("-vuln", "/code-vuln", "/deps-vuln"))
+        or "vuln" in rule.capability
+    }
+    assert roles["capabilities/deps-vuln"] is Role.VULN
+    assert roles["capabilities/code-vuln"] is Role.VULN

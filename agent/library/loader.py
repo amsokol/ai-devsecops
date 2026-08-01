@@ -17,7 +17,7 @@ import yaml
 
 from agent.errors import ConfigError
 
-SUPPORTED_CONTRACT_VERSIONS = frozenset({2})
+SUPPORTED_CONTRACT_VERSIONS = frozenset({2, 3, 4, 5, 6})
 """Which result contracts this agent can read. A set rather than a number so one agent can serve two
 library versions through a migration. Nothing is pinned to `1` any more, and accepting a contract
 this validator does not enforce would be worse than refusing it."""
@@ -30,6 +30,11 @@ _ROW = re.compile(r"^\|\s*`(?P<id>[^`]+)`\s*\|(?P<rest>.*)\|\s*$")
 _LINK = re.compile(r"\]\((?P<target>[^)#]+\.md)(?:#[^)]*)?\)")
 _HEADER_FIELD = re.compile(r"^(?P<key>[a-z_]+):\s*(?P<value>.*)$")
 _EMPTY_CELL = "—"
+# Capability-profile row: `| advisories | `none` | — | — |` (method is the second column).
+_PROFILE_FACT = re.compile(
+    r"^\|\s*(?P<fact>[A-Za-z0-9 _-]+?)\s*\|\s*`(?P<method>[^`]+)`\s*\|",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,11 +162,25 @@ class Library:
     ) -> tuple[str, ...]:
         """Which enabled ecosystems a set of changed paths touches, in index order."""
         matched = [
-            doc.id
-            for doc in self.by_kind("ecosystem")
-            if doc.id in enabled and any(doc.matches_path(path) for path in paths)
+            document.id
+            for document in self.by_kind("ecosystem")
+            if document.id in enabled and any(document.matches_path(path) for path in paths)
         ]
         return tuple(matched)
+
+    def fact_method(self, ecosystem: str, fact: str) -> str | None:
+        """The capability-profile method for one fact in an ecosystem document, or `None`.
+
+        Used by the planner so a `deps-vuln` task is not started when advisories are declared
+        `none` — that session can only spend tokens to rediscover a documented gap.
+        """
+        if ecosystem not in self._documents:
+            return None
+        wanted = fact.strip().casefold()
+        for match in _PROFILE_FACT.finditer(self.get(ecosystem).body()):
+            if match.group("fact").strip().casefold() == wanted:
+                return match.group("method").strip()
+        return None
 
     def known_paths(self, enabled: tuple[str, ...]) -> tuple[str, ...]:
         """Every `applies_to` marker of the enabled ecosystems, for classifying changed paths."""

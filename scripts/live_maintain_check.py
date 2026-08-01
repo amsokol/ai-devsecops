@@ -36,7 +36,7 @@ from agent.scm import GitHub, ScmError, marker
 from agent.scm.port import NewChange, NewIssue
 from agent.state import Memory
 
-LABEL = "agent"
+LABEL = "ai agent"
 REF = "refs/agent/state"
 KEY = "capabilities/live-check:scratch"
 SCRATCH = "LIVE-CHECK.md"
@@ -76,7 +76,7 @@ def main() -> int:
         NewChange(
             head=branch,
             base=repository.branch,
-            title="agent: live check for the maintenance path",
+            title="live check for the maintenance path",
             body=marker.stamp(
                 "Opened by `scripts/live_maintain_check.py` to check that a branch the agent "
                 "prepared is pushed and proposed under the agent's own account. Nothing here is a "
@@ -90,7 +90,7 @@ def main() -> int:
     raised = platform.raise_issue(
         NewIssue(
             key=KEY,
-            title="agent: live check — scratch",
+            title="live check — scratch",
             body=marker.stamp(
                 "Raised by `scripts/live_maintain_check.py`. Not a real finding; closed below.", KEY
             ),

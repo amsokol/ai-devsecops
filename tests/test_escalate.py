@@ -62,7 +62,7 @@ def test_the_same_failure_twice_running_escalates_once() -> None:
 
     assert [item.key for item in escalations] == [f"{DEPS}:failure:unavailable"]
     assert escalations[0].runs == 2
-    assert escalations[0].title == "agent: the deps-vuln check keeps failing"
+    assert escalations[0].title == "the deps-vuln check keeps failing"
     assert "in 2 scheduled runs with the same reason `unavailable`" in escalations[0].body
     assert "has not run to completion since 2026-07-25" in escalations[0].body
     assert read(escalations[0].body) == f"{DEPS}:failure:unavailable"

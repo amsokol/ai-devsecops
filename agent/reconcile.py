@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent.domain import Outcome
+from agent.evidence import Subject
 from agent.scm.port import Identity
 from agent.verdict import TaskOutcome
 
@@ -49,6 +50,7 @@ def _ecosystem_in_key(key: str) -> str | None:
 
     Keys are `capability:ecosystem:package:…` for dependency findings. Without an ecosystem segment
     the owning check is the whole capability (code surfaces are not split per ecosystem task).
+    Bundle keys (`capability:bundle:<id>:…`) have no single ecosystem — callers pass members.
     """
     parts = key.split(":")
     if len(parts) >= 2 and parts[1].startswith("ecosystems/"):
@@ -66,7 +68,12 @@ def _owns_finding(outcome: TaskOutcome, *, capability: str, ecosystem: str | Non
     return outcome.id.endswith(f"@{short}")
 
 
-def unproven(key: str, outcomes: tuple[TaskOutcome, ...]) -> str | None:
+def unproven(
+    key: str,
+    outcomes: tuple[TaskOutcome, ...],
+    *,
+    members: tuple[Subject, ...] | None = None,
+) -> str | None:
     """Why the absence of this finding proves nothing, or `None` when it may be acted on.
 
     The owning capability is read from the head of the key, which is where it is by construction.
@@ -76,10 +83,24 @@ def unproven(key: str, outcomes: tuple[TaskOutcome, ...]) -> str | None:
 
     For dependency findings the capability is split into one task per ecosystem. A run narrowed with
     `--only deps-outdated@cargo` must not close a python-uv issue: cargo finishing is not evidence
-    that the python pin was examined.
+    that the python pin was examined. A bundle spans ecosystems: every member's ecosystem must have
+    completed, or absence of the collapsed finding proves nothing about the siblings that were not
+    looked at.
     """
     capability = key.split(":", 1)[0]
-    ecosystem = _ecosystem_in_key(key)
+    ecosystems = tuple(
+        dict.fromkeys(subject.ecosystem for subject in (members or ()) if subject.ecosystem)
+    )
+    if ecosystems:
+        reasons = [unproven_for(capability, ecosystem, outcomes) for ecosystem in ecosystems]
+        pending = [reason for reason in reasons if reason is not None]
+        return pending[0] if pending else None
+    return unproven_for(capability, _ecosystem_in_key(key), outcomes)
+
+
+def unproven_for(
+    capability: str, ecosystem: str | None, outcomes: tuple[TaskOutcome, ...]
+) -> str | None:
     owning = [
         item for item in outcomes if _owns_finding(item, capability=capability, ecosystem=ecosystem)
     ]

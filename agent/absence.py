@@ -29,12 +29,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from agent.bundles import is_bundle_key, member_subjects, subjects_as_json, subjects_from_json
 from agent.coverage import Coverage
 from agent.escalate import about_a_failure
+from agent.findings import Finding
 from agent.reconcile import unproven
 from agent.verdict import TaskOutcome
 
 ABSENCES = "absences"
+BUNDLES = "bundles"
+"""Remembered member pins for bundle-keyed findings, so absence can require every ecosystem."""
 
 THRESHOLD = 2
 """Complete runs without a finding before its issue is closed. One is a claim on a single answer."""
@@ -66,6 +70,8 @@ class Absences:
     person who just approved something, and a closure they disagree with is one they can answer."""
     threshold: int = THRESHOLD
     kept: dict[str, Any] = field(default_factory=dict)
+    before_bundles: dict[str, Any] = field(default_factory=dict)
+    kept_bundles: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def of(
@@ -80,6 +86,7 @@ class Absences:
         threshold: int = THRESHOLD,
     ) -> Absences:
         stored = memory.get(ABSENCES)
+        bundles = memory.get(BUNDLES)
         return cls(
             outcomes=outcomes,
             run=run,
@@ -88,11 +95,18 @@ class Absences:
             before=dict(stored) if isinstance(stored, dict) else {},
             asked=asked,
             threshold=threshold,
+            before_bundles=dict(bundles) if isinstance(bundles, dict) else {},
         )
 
-    def reported(self, key: str) -> None:
+    def reported(self, key: str, finding: Finding | None = None) -> None:
         """This finding is on this run's list, so whatever it was doing last week is irrelevant."""
         self.before.pop(key, None)
+        if finding is not None and finding.bundle.strip():
+            self.kept_bundles[key] = subjects_as_json(member_subjects(finding))
+        elif key in self.before_bundles:
+            # Still present under the same key; keep last week's member list when this report
+            # did not carry members (escalations, etc.).
+            self.kept_bundles[key] = self.before_bundles[key]
 
     def settled(self, key: str) -> str | None:
         """`None` when this issue may be closed now, or why it is being left open for now.
@@ -112,8 +126,9 @@ class Absences:
         Neither is counted. A run that could not speak leaves the streak exactly where it was, so
         two counted runs are always two runs that actually looked.
         """
-        pending = unproven(key, self.outcomes)
-        if pending is None and self.coverage.looked_at(key) is False:
+        members = subjects_from_json(self.kept_bundles.get(key) or self.before_bundles.get(key))
+        pending = unproven(key, self.outcomes, members=members or None)
+        if pending is None and self.coverage.looked_at(key, members=members or None) is False:
             pending = (
                 "the check completed but recorded nothing about this package, so it did not get to "
                 "it this run. An issue is not closed on a sweep that did not reach its subject"
@@ -122,6 +137,9 @@ class Absences:
             entry = self.before.pop(key, None)
             if entry is not None:
                 self.kept[key] = entry
+            prior_bundle = self.before_bundles.pop(key, None)
+            if prior_bundle is not None:
+                self.kept_bundles[key] = prior_bundle
             return pending
 
         if about_a_failure(key) or (key in self.asked and not _quarantine_key(key)):
@@ -134,6 +152,7 @@ class Absences:
             # finding) must not close a forbidden-state issue on first miss — that is how demo2 #4
             # closed while actions/checkout@v7 was still inside the window.
             self.before.pop(key, None)
+            self.before_bundles.pop(key, None)
             return None
 
         previous = self.before.pop(key, None)
@@ -147,8 +166,14 @@ class Absences:
             # Nothing is kept: the issue is being closed, and a streak for a key nobody tracks is a
             # document that grows for the lifetime of the repository. Should the closure fail, the
             # next run starts this count again, which delays a closure and claims nothing false.
+            self.before_bundles.pop(key, None)
             return None
         self.kept[key] = {"runs": runs, "since": since, "last_run": self.run}
+        prior_bundle = self.before_bundles.pop(key, None)
+        if prior_bundle is not None:
+            self.kept_bundles[key] = prior_bundle
+        elif is_bundle_key(key) and key in self.kept_bundles:
+            pass
         return (
             "not reported in this run, and one complete run is one answer — the next run that "
             f"also completes without it closes this issue (absent since {since[:10]})"
@@ -161,4 +186,10 @@ class Absences:
         it walked: a key missing from that set has no issue any more, and its streak would be a
         number nobody can act on, kept for the lifetime of the repository.
         """
-        return dict(memory) | {ABSENCES: dict(self.kept)}
+        updated = dict(memory) | {ABSENCES: dict(self.kept)}
+        if self.kept_bundles:
+            updated[BUNDLES] = dict(self.kept_bundles)
+        elif BUNDLES in updated:
+            # Drop stale bundle maps once nothing remembered them — same lifetime rule as absences.
+            updated = {key: value for key, value in updated.items() if key != BUNDLES}
+        return updated

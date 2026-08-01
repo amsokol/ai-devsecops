@@ -134,9 +134,10 @@ what is not in the prompt or in the repository is not available to it.
 | Tool | Guarantee |
 | --- | --- |
 | `compare_versions` | Ecosystem-aware ordering of two version strings, and the semantic-version relationship between them: major, minor, patch, or unordered. |
-| `list_action_pins` | Deterministic census of third-party `uses:` and container `image:` pins under `.github/workflows` and `.github/actions`. Local `./` actions are omitted. |
+| `list_declared_pins` | Deterministic census of every direct registry pin the named ecosystem's manifests declare. Path/git/workspace pins are omitted from the coverage set. |
+| `list_action_pins` | Compatibility alias for `list_declared_pins` on `ecosystems/github-actions`. |
 | `action_publish_time` | GitHub Release `published_at` (else `created_at`) for an action `owner/name` + concrete tag. Does not use committer dates. |
-| `cleared_pin_target` | Newest quarantine-cleared concrete `target` (and `pending` young tips) for a package pin in any listed ecosystem (`ecosystem` document id required; `kind` only for github-actions). |
+| `cleared_pin_target` | Newest quarantine-cleared concrete `target` (and `pending` young tips) for a package pin in any listed ecosystem (`ecosystem` document id required; `kind` only for github-actions). Also returns `current_resolved` / `current_cleared`; the runner records `current-cleared` evidence from that answer. |
 | `check_quarantine` | Given a publication timestamp, answers whether the window has elapsed, when it will, and how to phrase the pending line. |
 | `known_fact` | Whether this run — or the cache of immutable facts — already answered a question about a subject. |
 | `record_fact` | Records an established fact against the calls it rests on, and returns the evidence key a finding cites. |
@@ -145,31 +146,62 @@ what is not in the prompt or in the repository is not available to it.
 Skills must not compute version ordering or date arithmetic by reasoning. These questions have
 exact answers, and a model's arithmetic is neither reproducible nor auditable.
 
-`list_action_pins` is required at the start of a repository-wide `deps-outdated` sweep for
-`ecosystems/github-actions`: the agent fails the task when recorded subjects do not cover that
-census. Never invent the pin list by reading workflow files by eye.
+`list_declared_pins` is required at the start of a repository-wide `deps-outdated` sweep for
+every listed ecosystem: pass the ecosystem document id. The agent fails the task when recorded
+subjects do not cover that census. Never invent the pin list by reading manifests by eye.
+`list_action_pins` remains as an alias for `ecosystems/github-actions` only.
+
+On maintain `deps-outdated`, the runner **may** pre-acquire that census and every registry pin's
+`current-cleared` answer before the sweeper session starts, write them into run evidence, and hand
+the model a compact prep pack path in `given`. When those registry tools are absent from the
+session, the analyst/sweeper must judge from the pack and evidence — do not try to re-query
+registries another way. When prep fails and the tools remain, the tools-first path above still
+applies.
+
+On maintain `deps-vuln`, the runner **may** pre-run the ecosystem's advisory scanner (the same
+command the ecosystem document names), seed `advisories` evidence, and hand the vuln session a pack.
+When `run_command` / `fetch` are absent after that prep, judge from the pack — do not re-crawl.
+Ecosystems whose advisories are `web` or `none` keep today's path (no scanner prep).
+
 
 `action_publish_time` is required for quarantine arithmetic on github-actions tags when checking one
 known tag: pass its `published_at` into `check_quarantine`. A publish-time fact that cites a
 committer date fails the task — that clock predates the Release and falsely clears the window.
 
 `cleared_pin_target` is required when setting `Moves to` / `target` for an outdated or floating
-finding (routine) in every listed ecosystem document. Pass the ecosystem id, package, and current
-pin; for `ecosystems/github-actions` also pass `kind` `action` or `image`. Do not invent the
-concrete version via a narrow registry fetch. Security `needs_unlock` for a young fixed advisory
-version is unchanged: a person may still unlock a PR. BSR covers **modules and remote plugins**
-(the tool tries `module` then `plugin` label list, then GitHub Releases for `owner/name` when
-labels are empty); when both buf and GitHub fail the tool returns `target=null` — record a gap, do
-not invent.
+finding (routine) in every listed ecosystem document, and whenever a pin is examined for quarantine
+of the version **in use**. Pass the ecosystem id, package, and current pin; for
+`ecosystems/github-actions` also pass `kind` `action` or `image`. Do not invent the concrete version
+via a narrow registry fetch. Security `needs_unlock` for a young fixed advisory version is unchanged:
+a person may still unlock a PR. BSR covers **modules and remote plugins** (the tool tries `module`
+then `plugin` label list; for empty protoc-plugin labels, `bufbuild/plugins` catalog then
+`source_url` Release, then GitHub `owner/name` last); when those fail the tool returns
+`target=null` and often `current_cleared=null` — emit `unknown_age`, do not invent a date or call it
+quarantine.
 
-After a successful `cleared_pin_target` call, do **not** re-list the same registry with `fetch`,
+The runner records a `current-cleared` evidence fact from each successful answer (value `true`,
+`false`, or null when the publish time could not settle). Cite that key on findings — do not call
+`record_fact` for `current-cleared` yourself. Evidence is **run-shared** (one store for the whole
+run so the same pin is not asked twice); completeness obligations are **not**. When
+`current_cleared` is `false`, the **`deps-outdated` task for that package's ecosystem** must emit
+`kind: quarantine` (or floating/vulnerable when those win) with `forbidden_state: true`. When it is
+`null`, emit `kind: unknown_age` (or floating/vulnerable) with `forbidden_state: true` — the summary
+and issue title must say the release date is unknown; do not use `quarantine`. The agent fails
+**that** task if the finding is missing — the same class of gate as an incomplete pin census,
+scoped the same way (capability + ecosystem). A `deps-vuln` task, or `deps-outdated` for another
+ecosystem, is not charged for the fact. Unverified publish time for a *candidate* still counts as
+not cleared for Moves to; for the pin in use it is `unknown_age`, not quarantine.
+
+After a successful `cleared_pin_target` call — including answers the runner seeded via outdated
+prep — do **not** re-list the same registry with `fetch`,
 `run_command`, or ecosystem CLIs (`go list -m -u`, `cargo outdated`, `pip index`, `buf registry …`,
-Hub/PyPI/BCR pages) to second-guess `target`, `pending`, or a null target. A null `target` with
-whatever `pending` the tool returned is a complete answer for routine Moves to: the pin is current
-for remediation purposes, or only waiting on quarantine. Use `known_fact` before any registry read.
-Narrow exceptions that remain allowed: `list_action_pins` / `action_publish_time` for github-actions
-census and publish time; the BSR **resolve probe** only to confirm a *specific* plugin tag already
-named (bundle / unlock), never to discover candidates.
+Hub/PyPI/BCR pages) to second-guess `target`, `pending`, `current_cleared`, or a null target. A null
+`target` with whatever `pending` the tool returned is a complete answer for routine Moves to when
+the pin in use is already cleared; when it is not, the finding is still required. Use `known_fact`
+before any registry read. Narrow exceptions that remain allowed when those tools are offered:
+`list_declared_pins` (and the `list_action_pins` alias) / `action_publish_time` for census and
+github-actions publish time; the BSR **resolve probe** only to
+confirm a *specific* plugin tag already named (bundle / unlock), never to discover candidates.
 
 `compare_versions` answers only about version strings. It does not decide whether a change counts
 as **major for policy purposes**: a major-line float jump in a CI action pin, a runtime image tag
@@ -283,21 +315,25 @@ A finding is a claim that something needs attention. Fields:
 | `subject` | File and symbol, or ecosystem and package. |
 | `location` | Where to attach a comment right now: file and line, or manifest and line. Volatile by design and deliberately absent from `key`. |
 | `summary` | One sentence, addressed to the author of the code. |
+| `slug` | Stable kebab-case identity for a **path** finding. Required when `subject` is a path. Part of the key — never derived from `summary`. |
 | `rationale` | Why it matters here, referring to the evidence. |
 | `evidence` | References to the evidence records supporting it. |
 | `remediation` | What to do, when known. |
 | `kind` | What is wrong, from the closed vocabulary below. Required for a finding about a package. |
 | `target` | The version the remediation moves to, when it is a version move and there is one. |
 | `needs_unlock` | This may not ship until a person approves it on its issue. |
+| `bundle` | Coupled-bundle identifier from the comment pass (`agent: bundle <id>`). When set, the agent keys and tracks the finding by that id, not by the member pin. |
+| `via` | How a transitive package entered the resolved graph (`direct → … → subject`). Required for `kind: vulnerable` when the subject is not a direct declared pin; shown on the issue as "Brought in by". Omit when the subject itself is declared. |
 
 **What a problem is called, not how it was worded.** A finding about a package names its `kind`, and
 the vocabulary is closed:
 
 | `kind` | When |
 | --- | --- |
-| `quarantine` | The version in use, or the one a reference resolves to, is inside the window. |
+| `quarantine` | The version in use, or the one a reference resolves to, is inside the window (`current_cleared` is false). |
+| `unknown_age` | Publication time for the pin in use could not be established (`current_cleared` is null). Not quarantine. |
 | `floating` | The reference is not a concrete version: a branch, a channel, a rolling tag. |
-| `outdated` | A newer version exists and has cleared quarantine. |
+| `outdated` | A newer version exists, has cleared quarantine, **and** the move can ship now (see kind order). |
 | `bundle` | Members that must move together are at versions that do not agree. |
 | `vulnerable` | An advisory covers what is pinned. |
 
@@ -324,19 +360,36 @@ So it is settled by a test on the reference, applied in this order, first match 
    is the ecosystem's, and its document says so plainly, because `@v5` is an ordinary pin for a
    GitHub action and `:25-jdk` is a rolling tag for a container image;
 3. it disagrees with the members it must move with → `bundle`;
-4. a newer version exists and is still inside the window → `quarantine`;
-5. a newer version exists and has cleared → `outdated`.
+4. the version in use — or the one a floating reference resolves to — has a known age that has not
+   cleared quarantine (`current_cleared` is `false`) → `quarantine`, and set `forbidden_state: true`.
+   This is the forbidden state on the default branch, not "a tip exists somewhere";
+5. publication time for that pin could not be established (`current_cleared` is null) →
+   `unknown_age`, and set `forbidden_state: true`. The issue title and summary must say the release
+   date is unknown; do not use `quarantine` (that word claims a date);
+6. a newer version exists and has cleared → `outdated` **only when that move can ship now** (the
+   pin's bundle and any NOTES / comment-pass cross-bundle or constraint blockers can move in the
+   same change, or human unlock is the sole remaining blocker for a major). Otherwise omit the
+   finding: name the blocker in the report; do not open a dependency-update issue for a bump that
+   cannot build.
+
+Young *candidates* that were seen but not adopted belong under **Pending quarantine** reporting
+([`policy/quarantine.md`](policy/quarantine.md)), not as the sole reason for `kind: quarantine` when
+the pin in use is already cleared. When floating or vulnerable wins steps 2 or 1 and the resolved
+tip is still inside the window, keep that kind and still set `forbidden_state: true`. When those
+kinds win and the age is unknown, keep that kind and still set `forbidden_state: true`.
 
 One reference produces one finding. A pin that is both floating and covered by an advisory is one
 `vulnerable` finding whose summary says it also floats — not two, because two issues about one line
 ask a person to fix the same line twice.
 
-**A pin with nowhere to move names no target.** For a finding about a package, `target` is what says
-there is somewhere to go, and the agent reads it that way: a finding without one is reported and never
-queued for a fix. Quarantine is the ordinary case — the newest release is real and worth reporting, and
-until the clock runs out there is no cleared version to move to. Do not name the current version, and
-do not name a lower one to have something in the field: a session asked to fix a pin that cannot move
-invents a move, and the first live maintenance run downgraded an action by a major version that way.
+**A pin with nowhere cleared to move names no target.** For a finding about a package, `target` is
+what says there is somewhere to go, and the agent reads it that way: a finding without one is
+reported and never queued for a fix. When `cleared_pin_target` names a cleared `target` — including
+an older cleared version to pin down to while the tip is still young — use that value. Do not name
+the current uncleared version, and do not invent a lower version the tool did not return: a session
+asked to fix a pin that cannot move invents a move, and the first live maintenance run downgraded an
+action by a major version that way. Never "fix" an in-window pin by adopting a newer tip that is
+also inside the window.
 
 **Holds are enforced, not remembered.** `needs_unlock` is a declaration and the agent acts on it:
 a held finding is reported and never changed, in that run and every later one, until an approval is
@@ -346,11 +399,18 @@ and setting it can only ever add a hold. What the field is *for* is the majors n
 which [`policy/grouping.md`](policy/grouping.md) lists.
 
 **Stable keys.** The key is composed of the parts that identify the problem and excludes the
-parts that drift between runs. For dependency findings: capability, ecosystem, package, and the
-advisory identifier when there is one or `kind` otherwise — not the current version, and not the
-summary. For code findings: capability, file path, issue slug and enclosing symbol — not line
-numbers, which move when unrelated code changes. A key that changes on every run turns a single
-problem into a stream of duplicate comments.
+parts that drift between runs. For dependency findings: capability, ecosystem, package, and
+`kind` — not the current version, not the summary, and not the advisory identifier. Every advisory
+against one pin is one bump and one issue; the advisory ids live in the finding body. (An older
+contract keyed each advisory separately; that opened nine tickets for one `urllib3` pin.) For a
+finding that names a `bundle`, the key is capability, `bundle`, the bundle id, and `kind` — never
+the member ecosystem or package — so a couple that spans manifests opens one issue and stays one
+issue when only one member is dirty. For code findings: capability, file path, **`slug`**, and
+enclosing symbol — not line numbers, and not the summary. The slug is a stable kebab-case id the
+task names explicitly; rephrasing the summary must not change it. When exactly one open agent issue
+already covers the same capability + path + symbol, the agent updates that issue (migrating the key)
+instead of opening a duplicate. A key that changes on
+every run turns a single problem into a stream of duplicate comments.
 
 `location` carries the volatile position that `key` omits, because an inline comment still has to
 land on a line. The two answer different questions: `key` asks "is this the same problem as before",

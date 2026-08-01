@@ -102,6 +102,44 @@ def test_a_role_nobody_bound_says_so_instead_of_guessing() -> None:
     assert "analyst" in str(error.value)
 
 
+def test_sweeper_falls_back_to_the_analyst_model_when_unbound() -> None:
+    """Optional role: mechanical outdated may share analyst until a product binds a cheaper one."""
+    models = chosen({Role.ANALYST: Choice(backend="fake", model="cheap")})
+    binding = models.for_role(Role.SWEEPER)
+    assert binding.role is Role.SWEEPER
+    assert (binding.backend, binding.model) == ("fake", "cheap")
+
+
+def test_vuln_falls_back_to_the_analyst_model_when_unbound() -> None:
+    """Optional role: vuln analysis may share analyst until a product binds a specialised one."""
+    models = chosen({Role.ANALYST: Choice(backend="fake", model="careful")})
+    binding = models.for_role(Role.VULN)
+    assert binding.role is Role.VULN
+    assert (binding.backend, binding.model) == ("fake", "careful")
+
+
+def test_a_bound_sweeper_is_not_silently_replaced() -> None:
+    models = chosen(
+        {
+            Role.ANALYST: Choice(backend="fake", model="careful"),
+            Role.SWEEPER: Choice(backend="fake", model="cheap"),
+        }
+    )
+    assert models.for_role(Role.SWEEPER).model == "cheap"
+    assert models.for_role(Role.ANALYST).model == "careful"
+
+
+def test_a_bound_vuln_is_not_silently_replaced() -> None:
+    models = chosen(
+        {
+            Role.ANALYST: Choice(backend="fake", model="careful"),
+            Role.VULN: Choice(backend="fake", model="security-specialist"),
+        }
+    )
+    assert models.for_role(Role.VULN).model == "security-specialist"
+    assert models.for_role(Role.ANALYST).model == "careful"
+
+
 def test_backend_settings_come_from_the_agent_and_not_from_the_product() -> None:
     """A product chooses what it pays for; how tightly that runs is the agent's business."""
     loosened = chosen(

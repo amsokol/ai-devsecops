@@ -193,3 +193,6 @@ def test_a_title_reads_the_same_way_for_the_same_subject(platform: FakePlatform)
     assert first == again
     assert "jinja2" in first
     assert "3.1.3" not in first
+    assert first.startswith("security fix for ")
+    assert "agent:" not in first
+    assert platform.labels[platform.proposed[0].number] == ("ai agent",)

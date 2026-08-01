@@ -6,6 +6,7 @@ evidence record and the cache cannot be bypassed by a task that would rather not
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,15 @@ class Session:
         self.change = change
         """The change under review, when there is one. Absent in a repository-wide run."""
         self.evidence = EvidenceStore()
+        self.pin_targets: dict[tuple[str, str, str, str], object] = {}
+        """Run-level memo of `cleared_pin_target` answers, keyed by ecosystem/package/current/kind.
+
+        Registry arithmetic is deterministic within a run; asking crates.io twice for the same pin
+        because two tasks (or a retry) needed it is pure token cost. Not written to the disk cache:
+        quarantine clearance moves with the clock.
+        """
+        self.pin_lock = threading.Lock()
+        """Guards `pin_targets` when parallel ecosystem prep races the same session memo."""
         self._never_send = never_send
         self._scratch_root = scratch_root
         self._tool_cache = tool_cache or scratch_root / "tools"

@@ -149,6 +149,52 @@ def test_abandoned_branch_is_reclaimed_then_planned(
     assert [job.branch for job in queue.jobs] == [branch]
 
 
+def test_abandoned_branch_held_by_worktree_is_reclaimed_then_planned(
+    library: Library, overlay: Overlay, git_repo: Path, tmp_path: Path
+) -> None:
+    """A crashed fix leaves a worktree on the tip; reclaim must detach it before branch -D."""
+    item = _judged()
+    branch = branch_for(item)
+    repository = Repository.open(git_repo)
+    stuck = tmp_path / "stuck-fix"
+    subprocess_run = __import__("subprocess").run
+    subprocess_run(
+        ["git", "worktree", "add", "--quiet", "-b", branch, str(stuck)],
+        cwd=git_repo,
+        check=True,
+        capture_output=True,
+    )
+    assert repository.has_branch(branch)
+    assert stuck.resolve() in {path.resolve() for path in repository.worktrees_on(branch)}
+
+    platform = FakePlatform(remote_branches={branch})
+    reclaimed = reclaim_abandoned(
+        platform,
+        repository,
+        judged=(item,),
+        open_heads=set(),
+        approvals={},
+        overlay=overlay,
+        run="run-2",
+    )
+    assert reclaimed.failure == ""
+    assert reclaimed.branches == [branch]
+    assert not repository.has_branch(branch)
+    assert branch not in platform.remote_branches
+    assert repository.worktrees_on(branch) == ()
+    assert not stuck.exists()
+
+    queue = plan_fixes(
+        (item,),
+        library=library,
+        overlay=overlay,
+        playbook="playbooks/maintain",
+        repository=repository,
+        max_open_fix_requests=5,
+    )
+    assert [job.branch for job in queue.jobs] == [branch]
+
+
 def test_open_pr_is_never_reclaimed(library: Library, overlay: Overlay, git_repo: Path) -> None:
     item = _judged()
     branch = branch_for(item)

@@ -22,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Self
+from urllib.parse import urlencode
 
 from agent.errors import ConfigError
 from agent.repo import Repository
@@ -400,8 +401,16 @@ class GitHub:
         as a tracked finding would be edited and closed as one. The marker is what proves
         authorship — anyone can apply a label, and the agent must not close a human's issue.
         """
+        return self._labelled_issues(label=label, state="open")
+
+    def closed_issues(self, *, label: str) -> tuple[Issue, ...]:
+        """Closed issues with the label and marker — candidates to reopen when a finding returns."""
+        return self._labelled_issues(label=label, state="closed")
+
+    def _labelled_issues(self, *, label: str, state: str) -> tuple[Issue, ...]:
         found: list[Issue] = []
-        for item in self._paged(f"repos/{self.slug}/issues", query=f"state=open&labels={label}"):
+        query = urlencode({"state": state, "labels": label})
+        for item in self._paged(f"repos/{self.slug}/issues", query=query):
             if "pull_request" in item:
                 continue
             body = str(item.get("body") or "")
@@ -434,8 +443,11 @@ class GitHub:
             reference=str(got.get("html_url") or ""),
         )
 
-    def edit_issue(self, issue: Issue, body: str) -> None:
-        self._api(f"repos/{self.slug}/issues/{issue.number}", method="PATCH", body={"body": body})
+    def edit_issue(self, issue: Issue, body: str, *, title: str | None = None) -> None:
+        payload: dict[str, str] = {"body": body}
+        if title is not None and title != issue.title:
+            payload["title"] = title
+        self._api(f"repos/{self.slug}/issues/{issue.number}", method="PATCH", body=payload)
 
     def note(self, issue: Issue, body: str) -> None:
         self._api(
@@ -456,6 +468,13 @@ class GitHub:
             f"repos/{self.slug}/issues/{issue.number}",
             method="PATCH",
             body={"state": "closed", "state_reason": "completed"},
+        )
+
+    def reopen_issue(self, issue: Issue) -> None:
+        self._api(
+            f"repos/{self.slug}/issues/{issue.number}",
+            method="PATCH",
+            body={"state": "open"},
         )
 
     def proposals(self, *, prefix: str) -> tuple[Proposal, ...]:
@@ -567,9 +586,18 @@ class GitHub:
                 "base": new.base,
             },
         )
+        number = int(got.get("number", 0))
+        if new.labels and number:
+            for name in new.labels:
+                self._ensure_label(name)
+            self._api(
+                f"repos/{self.slug}/issues/{number}/labels",
+                method="POST",
+                body={"labels": list(new.labels)},
+            )
         wrote = got.get("user")
         return Proposal(
-            number=int(got.get("number", 0)),
+            number=number,
             head=new.head,
             reference=str(got.get("html_url") or ""),
             author=str(wrote.get("login", "")) if isinstance(wrote, dict) else "",
@@ -579,8 +607,8 @@ class GitHub:
         """Create the label once per run, and treat "it already exists" as success.
 
         Asked for rather than assumed, because a label the repository does not have is dropped
-        silently when an issue is created — and the whole reconciliation then reads an empty list
-        next week and opens every issue again.
+        silently when an issue or pull request is labelled — and the whole reconciliation then
+        reads an empty list next week and opens every issue again.
         """
         if label in self._labelled:
             return

@@ -38,6 +38,9 @@ summary: Security defects in the product's own code.
 Reachability decides. A dangerous pattern with no path from untrusted input is at most a
 low-severity note. State the path in one sentence: where the data enters, and where it is used.
 
+Every path finding must set a stable `slug` (kebab-case) for the finding key — not derived from
+the summary. Reuse an open issue's slug when the same file and symbol already have one.
+
 A passing build says nothing about security, and neither does the absence of a scanner finding.
 Both are inputs, not conclusions.
 

@@ -312,3 +312,57 @@ def test_a_finding_citing_evidence_the_run_never_collected_is_rejected(
     executed = run(backend, library, tmp_path, evidence=EvidenceStore())
 
     assert executed[0].outcome.reason is Reason.INVALID_RESULT
+
+
+def _uncleared_cargo_store() -> EvidenceStore:
+    from agent.evidence import Question
+
+    store = EvidenceStore()
+    store.add(
+        Evidence.verified(
+            question=Question.CURRENT_CLEARED,
+            subject=Subject(ecosystem="ecosystems/cargo", package="serde", version="1.0.0"),
+            value=False,
+            origin=Origin.API,
+            source="ecosystems/cargo:serde@1.0.0→none",
+            observed_at=MOMENT,
+            recipe="capabilities/deps-outdated@cleared_pin_target",
+        )
+    )
+    return store
+
+
+def test_shared_uncleared_fact_does_not_fail_deps_vuln_parse(tmp_path: Path) -> None:
+    """Facts are run-global; deps-vuln does not own current-quarantine obligations."""
+    import json
+
+    from agent.executor import _parse_analysis
+    from agent.results import InvalidResult
+
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps({"outcome": "clean"}), encoding="utf-8")
+    task = PlannedTask(
+        id="deps-vuln@cargo",
+        capability="capabilities/deps-vuln",
+        role=Role.ANALYST,
+        required=True,
+        ecosystem="ecosystems/cargo",
+        knowledge=("capabilities/deps-vuln",),
+    )
+    result = _parse_analysis(path, task=task, evidence=_uncleared_cargo_store(), root=tmp_path)
+    assert result.outcome is Outcome.CLEAN
+    # Sanity: the same store still fails the owning outdated task without a finding.
+    outdated = PlannedTask(
+        id="deps-outdated@cargo",
+        capability="capabilities/deps-outdated",
+        role=Role.ANALYST,
+        required=True,
+        ecosystem="ecosystems/cargo",
+        knowledge=("capabilities/deps-outdated",),
+    )
+    try:
+        _parse_analysis(path, task=outdated, evidence=_uncleared_cargo_store(), root=tmp_path)
+    except InvalidResult as error:
+        assert "serde" in str(error)
+    else:
+        raise AssertionError("expected InvalidResult for deps-outdated@cargo")

@@ -20,12 +20,15 @@ tasks:
     when: hotspots-present
 
   - capability: capabilities/code-vuln
+    role: vuln
     when: hotspots-present
 
   - capability: capabilities/deps-outdated
+    role: sweeper
     when: ecosystem-enabled
     per_ecosystem: true
 
   - capability: capabilities/deps-vuln
+    role: vuln
     when: ecosystem-enabled
     per_ecosystem: true

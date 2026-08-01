@@ -17,6 +17,8 @@ from agent.tools.commands import CommandResult, CommandRunner, NotPermitted
 from agent.tools.dates import Quarantine, age_days, quarantine
 from agent.tools.files import FileTools, Match, NotEdited, OutsideRepository, Withheld
 from agent.tools.network import HostNotPermitted, HttpClient, Response
+from agent.tools.pins import DeclaredPin, list_declared_pins
+from agent.tools.pins import packages as declared_packages
 from agent.tools.targets import ClearedPinTarget, cleared_pin_target
 from agent.tools.versions import Comparison, Step, compare_versions
 
@@ -27,6 +29,7 @@ __all__ = [
     "CommandResult",
     "CommandRunner",
     "Comparison",
+    "DeclaredPin",
     "FileTools",
     "Grants",
     "HostNotPermitted",
@@ -45,7 +48,9 @@ __all__ = [
     "age_days",
     "cleared_pin_target",
     "compare_versions",
+    "declared_packages",
     "grant",
     "list_action_pins",
+    "list_declared_pins",
     "quarantine",
 ]

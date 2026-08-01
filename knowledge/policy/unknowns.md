@@ -62,8 +62,11 @@ records a latest version that was never published as the newest and calls it rep
 
 ## Effect on findings
 
-Whatever the reason, an unverified fact never becomes a finding by itself and never opens an issue.
-There is nothing to report about the code; the gap is reported about the run.
+Whatever the reason, an unverified fact never becomes a finding by itself and never opens an issue —
+**except** when the missing fact is the publish time of a pin already in use: that is
+`kind: unknown_age` on the deps-outdated task ([`quarantine.md`](quarantine.md)), because silence
+would hide an uncheckable pin and calling it quarantine would invent a date. There is still nothing
+to "fix" automatically; the issue is the gap made visible.
 
 When an entire capability could not run, say that plainly instead of reporting the capability as
 passing. "Dependency vulnerabilities: not checked, no scanner for this ecosystem" is useful.

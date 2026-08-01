@@ -29,7 +29,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from agent.evidence import Evidence
+from agent.evidence import Evidence, Subject
 
 COVERAGE = "coverage"
 
@@ -76,7 +76,7 @@ class Coverage:
             gathered.setdefault(f"{capability}:{subject.ecosystem}", set()).add(subject.package)
         return cls(examined={bucket: frozenset(names) for bucket, names in gathered.items()})
 
-    def looked_at(self, key: str) -> bool | None:
+    def looked_at(self, key: str, *, members: tuple[Subject, ...] | None = None) -> bool | None:
         """Whether this run examined what the key is about, or `None` when it cannot say.
 
         `None` for anything that is not a package — a code finding, an escalation about a failing
@@ -90,14 +90,39 @@ class Coverage:
         against what the check demonstrably does — once a bucket has anything in it, this check
         records a fact per package here, and a package missing from the list is a package it did not
         reach. That is the shape of the failure this was built for: four of six pins, not none.
+
+        A bundle key needs every remembered member examined. Missing members from memory means this
+        gate cannot speak (`None`); absence still waits on the per-ecosystem outcome check.
         """
         parts = key.split(":")
+        if len(parts) >= 3 and parts[1] == "bundle":
+            if not members:
+                return None
+            answers = [
+                self._package_looked(parts[0], subject.ecosystem, subject.package)
+                for subject in members
+                if subject.ecosystem and subject.package
+            ]
+            if not answers:
+                return None
+            if any(answer is False for answer in answers):
+                return False
+            if any(answer is None for answer in answers):
+                return None
+            return True
         if len(parts) < 3 or not parts[1].startswith(ECOSYSTEM):
             return None
-        known = self.examined.get(f"{parts[0]}:{parts[1]}")
+        return self._package_looked(parts[0], parts[1], parts[2])
+
+    def _package_looked(
+        self, capability: str, ecosystem: str | None, package: str | None
+    ) -> bool | None:
+        if not ecosystem or not package:
+            return None
+        known = self.examined.get(f"{capability}:{ecosystem}")
         if known is None:
             return None
-        return parts[2] in known
+        return package in known
 
     def shortfall(self, before: Mapping[str, Any]) -> tuple[str, ...]:
         """What an earlier run examined and this one did not, in the buckets both of them entered.

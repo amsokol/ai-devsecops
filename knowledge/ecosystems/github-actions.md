@@ -43,11 +43,12 @@ endpoint that answers the question over the index that has to be searched.
 - Tool versions pinned in `env:`, such as a build-tool version variable, count as pins when the
   product documents them.
 
-Call `list_action_pins` first on every repository-wide outdated sweep for this ecosystem. That tool
-is the census: every third-party `uses:` and `image:` above, once per package. Then record a fact
-for each package it returns — including pins that are fine — before querying registries. The agent
-fails the task when recorded subjects do not cover that census. Never invent the pin list by reading
-workflow files by eye; a sweep that stops at the first few interesting pins is incomplete, not clean.
+Call `list_declared_pins` (or the `list_action_pins` alias) first on every repository-wide outdated
+sweep for this ecosystem. That tool is the census: every third-party `uses:` and `image:` above,
+once per package. Then record a fact for each package it returns — including pins that are fine —
+before querying registries. The agent fails the task when recorded subjects do not cover that
+census. Never invent the pin list by reading workflow files by eye; a sweep that stops at the first
+few interesting pins is incomplete, not clean.
 
 ## What counts as a concrete version here
 
@@ -72,7 +73,7 @@ the thing this capability exists to notice.
 **Action candidates.** For each third-party `uses: owner/name@current`, call
 `cleared_pin_target` with `ecosystem=ecosystems/github-actions` and `kind=action`. Use its `target`
 as `Moves to` when set; put `pending` tips under Pending quarantine. Do **not** invent the concrete
-tag from a narrow GitHub query or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target. Floating references such as `@main`, `@master`, `@latest`
+tag from a narrow GitHub query or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target. When `current_cleared` is `false`, emit `kind: quarantine` with `forbidden_state` (cite `evidence_key`); when it is `null` and the pack marks `float_like` (or `current` is a channel such as `@stable` / `@latest` / major-only with no dated tip), emit `kind: floating` with `forbidden_state`; otherwise emit `kind: unknown_age` with `forbidden_state` — say the release date is unknown, never quarantine. Do not leave the pin silent. Floating references such as `@main`, `@master`, `@latest`
 never appear as `target` (the tool returns a concrete cleared tag or null).
 
 Routine only: a security finding whose only fixed version is still in window still uses
@@ -94,7 +95,9 @@ Prefer `cleared_pin_target` for choosing `Moves to` — it uses Release dates in
 `ecosystem=ecosystems/github-actions` and `kind=image`. Channel tags (`25-jdk`, `1.24-bookworm`,
 `latest`) are never `target`; the tool returns the newest cleared concrete tag on the same major
 (and variant suffix), e.g. `25.0.3_9-jdk` or `1.24.5-bookworm`, or null. Do not invent the tag with
-a narrow Hub query — that is how demo2 drifted to an older `25.0.2_10-jdk`.
+a narrow Hub query — that is how demo2 drifted to an older `25.0.2_10-jdk`. When `current_cleared`
+is `false`, emit `kind: quarantine` with `forbidden_state` (cite `evidence_key`); when it is `null`,
+emit `kind: unknown_age` with `forbidden_state` — say the release date is unknown, never quarantine.
 
 **Image publish time.** Inside `cleared_pin_target` the Hub `last_updated` field is used as a
 heuristic timestamp (clearing needs margin). For a one-off check outside that tool, use the same

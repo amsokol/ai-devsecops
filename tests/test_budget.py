@@ -219,6 +219,59 @@ def spending(review: str, tmp_path: Path, library: Library) -> Overlay:
     return Overlay.load(root, library=library, notes_limit=8000)
 
 
+def test_a_fixer_reserve_stops_analysts_before_the_full_ceiling(
+    library: Library, tmp_path: Path
+) -> None:
+    """Analysts must not spend the slice reserved for fix sessions."""
+    backend = FakeBackend(default=costing(1000))
+    ledger = Ledger(RunBudget(max_parallel=1, tokens=1500, fixer_reserve=1000))
+    executed = run(backend, plan_of(*CAPABILITIES), library, tmp_path, ledger=ledger)
+
+    ran, refused = executed[:1], executed[1:]
+    assert ran[0].outcome.outcome is Outcome.CLEAN
+    assert all(item.outcome.outcome is Outcome.EXHAUSTED for item in refused)
+    assert "fixer reserve" in refused[0].attempts[0].session.detail
+    assert ledger.spend.tokens == 1000
+    assert asyncio.run(ledger.may_start(for_fixer=True)) is True
+    assert asyncio.run(ledger.may_start()) is False
+
+
+def test_fixers_may_spend_into_the_reserve(library: Library, tmp_path: Path) -> None:
+    """Once analysis has stopped at the reserve line, fix sessions still start."""
+    del library, tmp_path
+    ledger = Ledger(RunBudget(max_parallel=1, tokens=2500, fixer_reserve=1000))
+    asyncio.run(ledger.record(Usage(known=True, total_tokens=1600)))
+    assert asyncio.run(ledger.may_start()) is False
+    assert asyncio.run(ledger.may_start(for_fixer=True)) is True
+    asyncio.run(ledger.record(Usage(known=True, total_tokens=1000)))
+    assert asyncio.run(ledger.may_start(for_fixer=True)) is False
+    assert "spent" in ledger.exhausted_detail(for_fixer=True)
+
+
+def test_omitting_fixer_token_reserve_keeps_prior_behaviour(
+    tmp_path: Path, library: Library
+) -> None:
+    written = spending(
+        "review:\n  models:\n    analyst: fake/none\n  limits:\n    tokens_per_run: 9000\n"
+        "    minutes_per_task: 15\n    tasks_at_once: 3\n",
+        tmp_path,
+        library,
+    )
+    assert written.review.limits.fixer_token_reserve is None
+
+
+def test_a_reserve_that_leaves_no_room_for_analysis_is_refused(
+    tmp_path: Path, library: Library
+) -> None:
+    with pytest.raises(ConfigError, match="fixer_token_reserve"):
+        spending(
+            "review:\n  models:\n    analyst: fake/none\n  limits:\n    tokens_per_run: 1000\n"
+            "    minutes_per_task: 15\n    tasks_at_once: 3\n    fixer_token_reserve: 1000\n",
+            tmp_path,
+            library,
+        )
+
+
 def test_maintenance_is_given_less_than_a_review_somebody_is_waiting_for(overlay: Overlay) -> None:
     """The product decides both sets of numbers; the agent only decides which set a trigger gets."""
     review = overlay.settings_for(Trigger.CHANGE_OPENED).limits

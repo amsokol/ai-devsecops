@@ -30,14 +30,18 @@ applies_to: [Cargo.toml, Cargo.lock, rust-toolchain.toml]
 
 ## Evidence recipes
 
-**Declared pins.** Read requirements from `[dependencies]`, `[dev-dependencies]`,
-`[build-dependencies]` and workspace `workspace.dependencies`, including path and git pins.
+**Declared pins.** Call `list_declared_pins` with `ecosystem=ecosystems/cargo` first on every
+repository-wide outdated sweep. Record a fact for every package in its `packages` list — including
+pins that are fine — before querying crates.io. The agent fails the task when the census is not
+covered. Path and git deps are omitted from that list. Then read requirements from
+`[dependencies]`, `[dev-dependencies]`, `[build-dependencies]` and workspace `workspace.dependencies`
+as the tool already enumerated them.
 
 **Candidates / Moves to.** For each direct crate pin, call `cleared_pin_target` with
 `ecosystem=ecosystems/cargo`, `package=<crate>`, and `current` as the manifest requirement (or the
 locked version when classifying the resolved pin). Use its `target` as `Moves to` when set; put
 `pending` tips under Pending quarantine. Do **not** invent the concrete version from a narrow
-crates.io fetch or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target.
+crates.io fetch or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target. When `current_cleared` is `false`, emit `kind: quarantine` with `forbidden_state` (cite `evidence_key`); when it is `null`, emit `kind: unknown_age` with `forbidden_state` — say the release date is unknown, never quarantine. Do not leave the pin silent.
 
 `cargo outdated` remains useful to discover which crates lag; it does not choose `Moves to`.
 

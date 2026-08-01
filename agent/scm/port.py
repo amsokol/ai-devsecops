@@ -272,6 +272,8 @@ class NewChange:
     base: str
     title: str
     body: str
+    labels: tuple[str, ...] = ()
+    """Applied after open so a team can find or mute the agent's change requests with one query."""
 
 
 class Platform(Protocol):
@@ -337,11 +339,19 @@ class Platform(Protocol):
         """The agent's own open issues, carrying a marker. Somebody else's issue is not the agent's
         to edit or close, and the label alone is not proof of authorship."""
 
+    def closed_issues(self, *, label: str) -> tuple[Issue, ...]:
+        """The agent's own closed issues with a marker, so a returning finding can reopen one ticket
+        instead of opening a second."""
+
     def raise_issue(self, new: NewIssue, *, label: str) -> Issue:
         """Start tracking a finding, labelled so a team can find, mute or query the whole set."""
 
-    def edit_issue(self, issue: Issue, body: str) -> None:
-        """Bring an existing issue up to date, rather than opening a second one for one problem."""
+    def edit_issue(self, issue: Issue, body: str, *, title: str | None = None) -> None:
+        """Bring an existing issue up to date, rather than opening a second one for one problem.
+
+        `title` refreshes the human-facing kind phrase when it changed; omit to leave the title.
+        """
+        ...
 
     def note(self, issue: Issue, body: str) -> None:
         """Say something on the issue. Every closure says why before it happens."""
@@ -350,6 +360,9 @@ class Platform(Protocol):
         """Comment bodies on an issue, for idempotent notices (open-PR pointer, etc.)."""
 
     def close_issue(self, issue: Issue) -> None: ...
+
+    def reopen_issue(self, issue: Issue) -> None:
+        """Bring a closed agent issue back: a finding that returned must keep its history."""
 
     def proposals(self, *, prefix: str) -> tuple[Proposal, ...]:
         """Open change requests whose branch starts with the agent's own prefix.

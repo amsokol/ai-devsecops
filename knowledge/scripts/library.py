@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parent.parent
 REPO = ROOT.parent
 INDEX = ROOT / "INDEX.md"
 IDENTITY = ROOT / "library.yaml"
-CHANGELOG = ROOT / "CHANGELOG.md"
+CHANGELOG = REPO / "CHANGELOG.md"
 PYPROJECT = REPO / "pyproject.toml"
 
 # Top-level documents are prose about the library, not library documents.
-STANDALONE = {"README.md", "DESIGN.md", "CONTRACT.md", "CHANGELOG.md", "INDEX.md"}
+STANDALONE = {"CONTRACT.md", "INDEX.md"}
 
 # Templates are artefacts products copy; their id names the future path in the product.
 TEMPLATE_DIR = "overlay/templates"
@@ -207,7 +207,10 @@ def product_version() -> str:
 
 
 def check_changelog(errors: list[str]) -> None:
-    """The newest knowledge changelog section must match the monorepo product version."""
+    """The newest root changelog section must match the monorepo product version."""
+    if not CHANGELOG.is_file():
+        errors.append(f"{CHANGELOG}: missing")
+        return
     headings = re.findall(r"^##\s+(\S+)", CHANGELOG.read_text(), re.M)
     if not headings:
         errors.append(f"{CHANGELOG.name}: no version section")

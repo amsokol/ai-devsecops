@@ -24,6 +24,13 @@ class Question(StrEnum):
     LATEST_VERSION = "latest-version"
     AVAILABLE_VERSIONS = "available-versions"
     PUBLISH_TIME = "publish-time"
+    CURRENT_CLEARED = "current-cleared"
+    """Whether the version in use (or resolved tip) has cleared the product's quarantine window.
+
+    Written by `cleared_pin_target`, not by model arithmetic. Value is true, false, or null when the
+    publish time could not settle — null counts as not cleared for findings and the executor gate.
+    """
+
     ARTIFACT_DIGEST = "artifact-digest"
     ADVISORIES = "advisories"
 

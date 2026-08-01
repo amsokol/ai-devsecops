@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from agent.domain import Outcome, Reason, RunResult
 from agent.evidence import Reliability
-from agent.findings import Action, Finding
+from agent.findings import Action, Finding, with_kind_severity
 from agent.policy import BlockingRules
 
 
@@ -82,7 +82,8 @@ def judge(
 ) -> tuple[Judged, ...]:
     """Decide each finding's action: what policy allows, capped by what the evidence supports."""
     decided: list[Judged] = []
-    for finding in findings:
+    for raw in findings:
+        finding = with_kind_severity(raw)
         reliability = finding.reliability(reliabilities)
         permitted = rules.blocks(
             finding.klass, finding.severity, forbidden_state=finding.forbidden_state

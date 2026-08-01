@@ -182,11 +182,10 @@ def _red_base(fixes: tuple[Fix, ...]) -> list[str]:
 
 
 def _entries(items: tuple[Judged, ...]) -> list[str]:
-    """One entry per subject, not per advisory.
+    """One entry per subject (and per kind), not per advisory row from the analyst.
 
-    Four advisories against one pin are one thing to do, and four near-identical paragraphs asking
-    for the same bump read as noise. The manifest keeps them separate, because each is its own
-    finding for the purpose of not reopening what a human already answered.
+    Four advisories against one pin are already one finding after merge; this still groups in case a
+    report is built from a raw set, and lists every advisory id on the line.
     """
     grouped: dict[str, list[Judged]] = {}
     for item in items:
@@ -210,9 +209,10 @@ def _entry(group: list[Judged]) -> str:
     text += f"\n  {finding.rationale}"
     others = sorted(
         {
-            other.finding.advisory
-            for other in group
-            if other.finding.advisory and other.finding.advisory != finding.advisory
+            aid
+            for judged in group
+            for aid in judged.finding.advisory_ids
+            if aid not in finding.advisory_ids[:1]
         }
     )
     if others:

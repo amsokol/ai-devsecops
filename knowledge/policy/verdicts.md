@@ -28,11 +28,12 @@ change request.
 | `critical` | Exploitable now, or breaks the product for every user. Reachable vulnerability, leaked secret, data loss. |
 | `high` | Serious defect or vulnerability with a plausible path to impact. Wrong results, missing authorisation, unhandled failure on a main path. |
 | `medium` | Real problem with limited or conditional impact. Degradation, edge-case failure, a vulnerability in tooling a user of the product never installs. |
-| `low` | Worth knowing, no immediate impact. Routine version drift, defensive improvement. |
+| `low` | Worth knowing, no immediate impact. Routine version drift (`outdated`), defensive improvement. |
 
 Severity describes impact on this product rather than the number a scanner printed, but it is not
 an open judgement: each capability document states how its findings are graded, and that statement
-is the rule. Where the rule is a table, follow the table.
+is the rule. Where the rule is a table, follow the table. For `deps-outdated`, a floating pin is
+`medium` and a quarantine break on the pin in use is `high` — the runner enforces those floors.
 
 Do not grade a finding down because the vulnerable code looks unused, or up because it looks
 alarming. Both are arguments from reading rather than from evidence, and they come out differently

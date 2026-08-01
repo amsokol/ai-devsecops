@@ -29,14 +29,23 @@ do not substitute recalled vulnerabilities.
 - `go.mod` and `go.sum` at the repository root and in any nested modules.
 - Direct `require` pins **and** the `tool (` block. Tools installed through the module graph are
   direct pins for policy and quarantine purposes, and they are frequently forgotten.
+  A `tool (` line has no version by design: the census takes the version from that module's
+  `require` row (often marked `// indirect`) and uses the **module** path as the pin identity, so
+  quarantine/`cleared_pin_target` hit the module proxy — not a false `floating` on an empty tool
+  line.
 - In a multi-module repository, work only on the modules the product enables.
 
 ## Evidence recipes
 
+**Declared pins.** Call `list_declared_pins` with `ecosystem=ecosystems/go-modules` first on every
+repository-wide outdated sweep. It covers direct `require` lines and the `tool` block; `// indirect`
+is omitted. Record a fact for every package in its `packages` list — including pins that are fine —
+before querying the proxy. The agent fails the task when the census is not covered.
+
 **Candidates / Moves to.** For each direct module pin, call `cleared_pin_target` with
 `ecosystem=ecosystems/go-modules`, `package=<module path>`, and `current` as the `go.mod` version.
 Use its `target` as `Moves to` when set; put `pending` tips under Pending quarantine. Do **not**
-invent the concrete version from a narrow proxy fetch or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target.
+invent the concrete version from a narrow proxy fetch or by eye. After the tool answers, do **not** re-query the registry (`fetch`, ecosystem CLIs) to second-guess `target`, `pending`, or a null target. When `current_cleared` is `false`, emit `kind: quarantine` with `forbidden_state` (cite `evidence_key`); when it is `null`, emit `kind: unknown_age` with `forbidden_state` — say the release date is unknown, never quarantine. Do not leave the pin silent.
 
 `go list -m -u all` remains useful to discover which modules lag; it does not choose `Moves to`.
 Prefer tooling the repository already provides — a Makefile target or script — when it exists.

@@ -1,15 +1,160 @@
 # Changelog
 
-What changed in the agent (runner + bundled knowledge), and why. Written for whoever has to decide
-whether to move a product's runner pin: every entry says what a run will do differently afterwards.
-Judgement-only notes also appear under [`knowledge/CHANGELOG.md`](knowledge/CHANGELOG.md); both bump
-the same product version.
+What changed in this product (runner + bundled knowledge), and why. Written for whoever has to
+decide whether to move a product's runner pin: every entry says what a run will do differently
+afterwards. Judgement and contract prose live under `knowledge/`; behaviour that ships in the same
+release is recorded here in one place.
+
+One product version — [`pyproject.toml`](pyproject.toml). There is no separate knowledge library
+version. `knowledge/library.yaml` carries only `contract_version`. Before monorepo `0.3.0` the
+library was versioned on its own; that pre-merge history remains in git (deleted
+`knowledge/CHANGELOG.md`).
 
 Versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html) read as Cargo reads it
 while the major number is `0`: the **middle** number moves on a breaking change, and the **last** one
 on everything else, fixes and additions included. Breaking means a product has to change something to
 adopt it — the command line, the overlay shape, a required overlay key, or the library contract.
 Until 1.0 those are all still allowed to move; every time one does, it is named here.
+
+## 0.6.0 — 2026-08-01
+
+Breaking: library contract `6`. Code findings require a stable `slug` (key identity); soft-dedup
+updates the sole open issue for the same path+symbol when the slug drifts.
+
+### Added
+
+- Local dogfood helper: [`DOGFOOD.md`](DOGFOOD.md) and [`scripts/dogfood-maintain.sh`](scripts/dogfood-maintain.sh)
+  (sandbox-off config copy, token resolve, foreground/bg maintain against sibling `ai-devsecops-demo2`).
+
+### Changed
+
+- Path findings: required `slug` field; key uses `slug`, not `summary`. Soft-dedup in issue
+  tracking when capability+path+symbol matches exactly one open agent issue.
+  Knowledge: [`knowledge/CONTRACT.md`](knowledge/CONTRACT.md),
+  [`knowledge/capabilities/code-quality.md`](knowledge/capabilities/code-quality.md),
+  [`knowledge/capabilities/code-vuln.md`](knowledge/capabilities/code-vuln.md).
+- Reclaim of abandoned fix branches removes linked worktrees before `branch -D`, so a crashed or
+  interrupted maintain no longer leaves a tip that permanently defers the next run
+  (`branch already exists`). Unsettled fix worktrees are discarded if `apply` is cancelled mid-run.
+- Tracked issues: title no longer prefixes `agent:`; label is `ai agent` (legacy `agent` still
+  read so existing tickets are not duplicated).
+- Fix pull requests: same title drop (`security fix for …` / `routine fix for …`) and label
+  `ai agent`.
+- Code-finding issue titles: `code quality` / `code vulnerability` plus a trimmed summary — not
+  the raw capability id or file path (path stays in the body).
+- Issue title severity markers: 🔴 critical / 🟠 high / 🟡 medium / ⚪ low.
+  Knowledge: [`knowledge/playbooks/maintain.md`](knowledge/playbooks/maintain.md).
+- PyPI `cleared_pin_target`: strip `name==version` pins; when full package JSON is truncated, list
+  versions from the project releases RSS and date via per-version JSON (fixes false `unknown_age`
+  for ruff / connectrpc / pip-audit). Floating action refs with no concrete tip (`@stable`) are
+  marked `float_like` so prep asks for `floating`, not `unknown_age`.
+  Knowledge: [`knowledge/ecosystems/python-pip-compile.md`](knowledge/ecosystems/python-pip-compile.md),
+  [`knowledge/ecosystems/python-uv.md`](knowledge/ecosystems/python-uv.md),
+  [`knowledge/ecosystems/github-actions.md`](knowledge/ecosystems/github-actions.md).
+- GitHub issue listing URL-encodes label names (`ai agent` → `ai%20agent`); an unencoded space made
+  `gh api …&labels=ai agent` hang until timeout, so maintain raised no issues.
+- Monorepo hygiene: one root `CHANGELOG.md` / `README.md` / `LICENSE` / lint ignore config; removed
+  duplicate copies under `knowledge/`. `library.py check` validates the root changelog against
+  `pyproject.toml`.
+
+## 0.5.0 — 2026-08-01
+
+Breaking: library contract `5`. `current_cleared: null` is `kind: unknown_age` (release date
+unknown), not quarantine. BSR protoc plugins take versions/dates from `bufbuild/plugins` first.
+
+### Changed
+
+- Finding kind `unknown_age`: issue title phrase **release date unknown**; severity floor medium;
+  quarantine gate requires it when publish time is null (quarantine remains for `false` only).
+  Knowledge: [`knowledge/policy/quarantine.md`](knowledge/policy/quarantine.md),
+  [`knowledge/policy/unknowns.md`](knowledge/policy/unknowns.md),
+  [`knowledge/capabilities/deps-outdated.md`](knowledge/capabilities/deps-outdated.md),
+  [`knowledge/ecosystems/bsr.md`](knowledge/ecosystems/bsr.md).
+- BSR `cleared_pin_target`: after empty plugin labels, read `bufbuild/plugins` catalog (commit date,
+  then `source_url` GitHub Release). Path `owner/name` GitHub fallback is last resort only.
+- Bazel publish time still prefers BCR commit dates (from 0.4.x work).
+- Routine `outdated` issues only when the move can ship (bundle + cross-bundle / constraint
+  blockers). A cleared tip that cannot build with the rest of the tree is report-only, not a
+  dependency-update ticket.
+  Knowledge: [`knowledge/policy/bundles.md`](knowledge/policy/bundles.md),
+  [`knowledge/playbooks/maintain.md`](knowledge/playbooks/maintain.md).
+
+## 0.4.0 — 2026-07-31
+
+Breaking: library contract `4`. Maintain and review must report pins already in use that have not
+cleared quarantine; the runner fails a deps-outdated task that leaves them silent. Findings may
+name a `bundle` id; keys and tracking change when they do.
+
+### Added
+
+- Question `current-cleared`: recorded automatically by `cleared_pin_target`.
+- Executor gate: every uncleared current pin needs a finding with `forbidden_state` (kind
+  quarantine, floating, or vulnerable) on the **owning** `deps-outdated@<ecosystem>` task. Only
+  tool-written `current-cleared` facts count; `record_fact` refuses that question. Facts stay
+  run-shared; the gate does not charge sibling ecosystems or `deps-vuln` / code tasks.
+- Returning findings reopen the closed agent issue with the same key (`closed_issues` /
+  `reopen_issue`); reopen does not consume the new-issue ceiling.
+- Finding field `bundle`: member findings collapse into one tracked unit keyed by
+  `capability:bundle:<id>:…`; fix jobs group by bundle; legacy per-member issues migrate closed
+  with a pointer.
+- Tool `list_declared_pins`: deterministic census for every listed ecosystem (cargo, npm,
+  python-uv, python-pip-compile, go-modules, bazel, bsr, github-actions). Incomplete outdated
+  sweeps fail the task; `list_action_pins` remains a github-actions alias.
+- Optional overlay limit `fixer_token_reserve`: tokens held for fix sessions so analysts cannot
+  burn the whole run ceiling first. Omit or `null` keeps prior behaviour.
+- Optional model role `sweeper`: maintain `deps-outdated` uses it; unbound overlays fall back to
+  `analyst`.
+- Optional model role `vuln`: maintain and review `deps-vuln` / `code-vuln` use it; unbound overlays
+  fall back to `analyst`.
+
+### Changed
+
+- Bazel `cleared_pin_target`: publish time from BCR (`source.json` commit on
+  `bazel-central-registry`) first; upstream GitHub Release only as fallback. Parse BCR
+  `github:owner/repo` repository refs so Release fallback works. Always date the pin in use even
+  when it sits outside the tip lookup window (avoids `current_cleared: null` for long BCR histories).
+- Kind order: `quarantine` means the version **in use** (or resolved tip) has not cleared — not
+  merely that a newer tip exists in the window. Pending tips stay under Pending quarantine when the
+  pin in use is already cleared.
+- Agent accepts contract versions `2`, `3`, and `4` (shipped knowledge is `4`).
+- New-issue ceiling counts distinct subjects (or bundle ids), not advisory rows.
+- Vulnerable findings share one key per pin (`…:vulnerable`); advisories merge into one issue and
+  one fix conversation. Legacy per-advisory tickets migrate closed with a pointer.
+- Token cost controls for maintain: tighter tool delivery ceilings; run-level
+  `cleared_pin_target` memo; optional `limits.fixer_token_reserve`; maintain `deps-outdated`
+  uses optional `sweeper` role (falls back to `analyst` when unbound).
+- Current-quarantine completeness gate scoped like the pin census (capability + ecosystem). Full
+  maintain dogfood `20260731T182227Z-b78cdce8` had treated run-global uncleared facts as every
+  analysis task's obligation — fixed without unsharing the evidence store.
+- Cost wave 1 (dogfood `20260731T185621Z` was ~25M tokens): sweeper knowledge omits the maintain
+  playbook and keep-list policies only (quarantine/verdicts/bundles/grouping/acquisition);
+  `deps-vuln` is not planned when the ecosystem profile marks advisories `none`; overlay template
+  binds `sweeper` by default.
+- Outdated Variant A (prep then judge): before the sweeper session the runner runs a deterministic
+  census + `cleared_pin_target` for every registry pin, writes `prep/pack.json`, seeds
+  `declared-pin` / `current-cleared` evidence, and hides registry tools (`list_declared_pins`,
+  `cleared_pin_target`, `fetch`, …). The model judges from the pack and emits findings; it does not
+  invent issues. Variant B (runner-emitted routine findings) remains open. EvidenceStore and
+  `pin_targets` are locked for parallel ecosystem prep.
+- Outdated census skips tooling caches (`.agent`, Go `pkg/mod`, …): a manifest inside a downloaded
+  module is not a product pin — dogfood issues like demo2 #43/#44 were noise.
+- Go `tool (` census: take the version from the module's `require` row (often `// indirect`) and
+  use the module path as the pin — empty tool lines are not `floating` (demo2 #74/#75).
+- Finding field `via`: transitive `kind: vulnerable` findings name the chain from a direct pin to
+  the subject; the issue body shows it as "Brought in by".
+- Issue titles name the kind for a human scanning the list: `floating dependency`,
+  `quarantine broken`, `dependency update`, `vulnerability`, or `{kind phrase} — bundle {id}`.
+  Severity floors for outdated: floating → medium, quarantine → high (runner-enforced).
+  Titles also lead with a severity emoji (🚨 critical / ⚠️ high / ⚡ medium / ℹ️ low).
+- New-issue ceiling prefers vulnerability findings (`security` / `deps-vuln` / `code-vuln`) before
+  routine drift, so a small `max_new_issues_per_run` still surfaces advisories first.
+- Vuln Variant A (prep then judge): before the vuln session the runner runs the ecosystem advisory
+  scanner, writes `prep/pack.json`, seeds `advisories` evidence, and hides `run_command` / `fetch`.
+  The model judges from the pack (including `via` for transitive hits). Web/`none` ecosystems
+  degrade to today's tools-first path. Code-vuln prep remains open.
+- [`DESIGN.md`](DESIGN.md) Found in operation items 1 (all ecosystems), 2, 5, 6, 8, 11, and 12
+  marked Done; dogfood on demo2 raised quarantine issue
+  [#29](https://github.com/amsokol/ai-devsecops-demo2/issues/29).
 
 ## 0.3.0 — 2026-07-31
 

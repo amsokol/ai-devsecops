@@ -62,6 +62,8 @@ class ClearedPinTarget:
     current_cleared: bool | None
     target: str | None
     pending: tuple[str, ...]
+    float_like: bool = False
+    """True when `current` is a channel / floating ref (stable, latest, major-only, …)."""
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -74,6 +76,7 @@ class ClearedPinTarget:
             "current_cleared": self.current_cleared,
             "target": self.target,
             "pending": list(self.pending),
+            "float_like": self.float_like,
         }
 
 
@@ -214,6 +217,7 @@ def _pick(
             current_cleared=statuses.get(tip) if tip else None,
             target=cleared[0] if cleared else None,
             pending=tuple(uncleared),
+            float_like=True,
         )
 
     resolved = current
@@ -239,6 +243,7 @@ def _pick(
         current_cleared=current_cleared,
         target=target,
         pending=pending,
+        float_like=False,
     )
 
 
@@ -672,29 +677,23 @@ def _for_pypi(
     now: datetime,
 ) -> ClearedPinTarget:
     name = package.strip()
-    meta = _json_get(http, f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json")
-    if not isinstance(meta, dict):
-        raise ValueError("PyPI did not return a package object")
-    releases = meta.get("releases")
-    if not isinstance(releases, dict):
-        raise ValueError("PyPI package has no releases map")
     current_ver = _strip_pep440_req(current)
-    names = [v for v in releases if isinstance(v, str) and not _is_prerelease(v)]
+    names = _pypi_version_names(http, name)
+    names = [v for v in names if isinstance(v, str) and not _is_prerelease(v)]
     names = [v for v in _sort_versions(ecosystem, names) if _on_line(ecosystem, current_ver, v)]
+    if current_ver and current_ver not in names and not _is_prerelease(current_ver):
+        # Listing fell back to a short window (RSS): always keep the pin in use on the board.
+        merged = [*names, current_ver]
+        names = [
+            ver
+            for ver in _sort_versions(ecosystem, merged)
+            if _on_line(ecosystem, current_ver, ver)
+        ]
     timed: list[_Candidate] = []
     for ver in names[:_MAX_LOOKUPS]:
-        detail = _json_get(http, f"https://pypi.org/pypi/{urllib.parse.quote(name)}/{ver}/json")
-        published = None
-        if isinstance(detail, dict):
-            urls = detail.get("urls") if isinstance(detail.get("urls"), list) else []
-            if urls and isinstance(urls[0], dict):
-                published = urls[0].get("upload_time_iso_8601") or urls[0].get("upload_time")
-            info = detail.get("info")
-            if not published and isinstance(info, dict):
-                published = info.get("upload_time_iso_8601") or info.get("upload_time")
-            if not isinstance(published, str):
-                published = None
-        timed.append(_Candidate(version=ver, published_at=published))
+        timed.append(
+            _Candidate(version=ver, published_at=_pypi_version_published(http, name, ver))
+        )
     for ver in names[_MAX_LOOKUPS:]:
         timed.append(_Candidate(version=ver, published_at=None))
     return _from_candidates(
@@ -709,7 +708,66 @@ def _for_pypi(
 
 
 def _strip_pep440_req(current: str) -> str:
-    return re.sub(r"^[\^~>=<\s!]+", "", current.strip()).split(",", 1)[0].strip()
+    """Bare version from a pin string: `connectrpc==0.11.1`, `==0.11.1`, `^1.2`, or `0.11.1`."""
+    text = current.strip()
+    if "==" in text:
+        text = text.rsplit("==", 1)[-1].strip()
+    return re.sub(r"^[\^~>=<\s!]+", "", text).split(",", 1)[0].strip()
+
+
+def _pypi_version_names(http: HttpClient, name: str) -> list[str]:
+    """Release names for a project.
+
+    The full `/pypi/<name>/json` payload embeds every file for every release and can exceed the
+    HTTP body limit (ruff is multi‑MB). When that response is truncated or unusable, fall back to
+    the project releases RSS — recent enough for tip/pending, while the pin in use is dated via
+    the per-version JSON endpoint.
+    """
+    url = f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json"
+    try:
+        response = http.get(url)
+    except urllib.error.HTTPError as error:
+        raise ValueError(f"{url}: HTTP {error.code}") from error
+    if not response.truncated:
+        try:
+            meta = json.loads(response.body)
+        except ValueError:
+            meta = None
+        if isinstance(meta, dict):
+            releases = meta.get("releases")
+            if isinstance(releases, dict):
+                return [ver for ver in releases if isinstance(ver, str)]
+    return _pypi_rss_versions(http, name)
+
+
+def _pypi_rss_versions(http: HttpClient, name: str) -> list[str]:
+    url = f"https://pypi.org/rss/project/{urllib.parse.quote(name)}/releases.xml"
+    try:
+        response = http.get(url)
+    except urllib.error.HTTPError as error:
+        raise ValueError(f"{url}: HTTP {error.code}") from error
+    titles = re.findall(r"<title>([^<]+)</title>", response.body)
+    # First <title> is the channel title ("PyPI recent updates for …").
+    versions = [title.strip() for title in titles[1:] if title.strip()]
+    if not versions:
+        raise ValueError(f"{url} named no releases")
+    return versions
+
+
+def _pypi_version_published(http: HttpClient, name: str, ver: str) -> str | None:
+    detail = _json_get(
+        http, f"https://pypi.org/pypi/{urllib.parse.quote(name)}/{urllib.parse.quote(ver)}/json"
+    )
+    if not isinstance(detail, dict):
+        return None
+    urls = detail.get("urls") if isinstance(detail.get("urls"), list) else []
+    published = None
+    if urls and isinstance(urls[0], dict):
+        published = urls[0].get("upload_time_iso_8601") or urls[0].get("upload_time")
+    info = detail.get("info")
+    if not published and isinstance(info, dict):
+        published = info.get("upload_time_iso_8601") or info.get("upload_time")
+    return published if isinstance(published, str) else None
 
 
 # --- go -----------------------------------------------------------------------
@@ -767,6 +825,13 @@ def _go_path(module: str) -> str:
 def _for_bazel(
     http: HttpClient, *, package: str, current: str, days: int, now: datetime
 ) -> ClearedPinTarget:
+    """BCR versions with publish times: BCR first, upstream GitHub Release as fallback.
+
+    BCR does not put timestamps in metadata.json. The date the UI shows is when the version
+    landed in bazel-central-registry — recovered from the commits API on that module's
+    `source.json`. Upstream Releases are a fallback when BCR history is missing. Repository
+    refs in metadata are often `github:owner/repo`, not https URLs.
+    """
     name = package.strip()
     url = (
         "https://raw.githubusercontent.com/bazelbuild/bazel-central-registry/"
@@ -792,19 +857,20 @@ def _for_bazel(
         v for v in versions if isinstance(v, str) and v not in yanked and not _is_prerelease(v)
     ]
     names = [v for v in _sort_versions(BAZEL, names) if _on_line(BAZEL, current_ver, v)]
+    # Always date the pin in use, even when it falls outside the tip window we crawl for Moves to.
+    lookup = list(names[:_MAX_LOOKUPS])
+    if current_ver in names and current_ver not in lookup:
+        lookup.append(current_ver)
+    dated: dict[str, _Candidate] = {}
+    for ver in lookup:
+        published, heuristic = _bazel_publish_time(http, module=name, version=ver, owner_repo=owner_repo)
+        dated[ver] = _Candidate(version=ver, published_at=published, heuristic=heuristic)
     candidates: list[_Candidate] = []
-    for ver in names[:_MAX_LOOKUPS]:
-        published = None
-        if owner_repo:
-            release = action_publish_time(http, owner_repo, ver)
-            if not release.found and not ver.startswith("v"):
-                release = action_publish_time(http, owner_repo, f"v{ver}")
-            if release.found and release.published_at:
-                published = release.published_at
-        # Upstream release dates are web-derived — always apply heuristic margin.
-        candidates.append(_Candidate(version=ver, published_at=published, heuristic=True))
-    for ver in names[_MAX_LOOKUPS:]:
-        candidates.append(_Candidate(version=ver, published_at=None, heuristic=True))
+    for ver in names:
+        if ver in dated:
+            candidates.append(dated[ver])
+        else:
+            candidates.append(_Candidate(version=ver, published_at=None, heuristic=True))
     return _from_candidates(
         ecosystem=BAZEL,
         kind="",
@@ -816,14 +882,43 @@ def _for_bazel(
     )
 
 
+def _bazel_publish_time(
+    http: HttpClient, *, module: str, version: str, owner_repo: str | None
+) -> tuple[str | None, bool]:
+    """Return (published_at, heuristic). BCR commit date first; GitHub Release second."""
+    bcr = _bcr_publish_time(http, module, version)
+    if bcr:
+        return bcr, False
+    if owner_repo:
+        release = action_publish_time(http, owner_repo, version)
+        if not release.found and not version.startswith("v"):
+            release = action_publish_time(http, owner_repo, f"v{version}")
+        if release.found and release.published_at:
+            return release.published_at, True
+    return None, True
+
+
+def _bcr_publish_time(http: HttpClient, module: str, version: str) -> str | None:
+    """When `modules/<module>/<version>/source.json` first appeared on BCR's default branch."""
+    path = f"modules/{module}/{version}/source.json"
+    return _github_path_oldest_commit(http, repo="bazelbuild/bazel-central-registry", path=path)
+
+
 def _github_owner_repo(url: str) -> str | None:
+    """Normalize BCR/GitHub repository refs to `owner/name`.
+
+    BCR metadata commonly uses `github:owner/name` (not an https URL).
+    """
     text = url.strip().removesuffix(".git")
+    if text.startswith("github:"):
+        text = text.removeprefix("github:")
     for prefix in ("https://github.com/", "http://github.com/", "github.com/"):
         if text.startswith(prefix):
             rest = text[len(prefix) :].strip("/")
             parts = rest.split("/")
             if len(parts) >= 2:
                 return f"{parts[0]}/{parts[1]}"
+            return None
     if text.count("/") == 1:
         return text
     return None
@@ -843,10 +938,11 @@ def _for_bsr(
 ) -> ClearedPinTarget:
     """Modules and remote plugins share one tool surface.
 
-    Prefer `buf registry module|plugin label list`. Protoc plugins often return exit 0 with an empty
-    label list (live: `buf.build/anthropics/buffa`) while GitHub already has newer tags — trusting
-    that empty list as "current" made BSR clean while cargo reported the same buffa line outdated.
-    When buf yields no labels, fall back to GitHub Releases for `owner/name` from the BSR path.
+    Prefer `buf registry module|plugin label list` (modules expose `create_time`). Protoc plugins
+    often return exit 0 with an empty label list while the Buf-managed catalog still knows the
+    version — that catalog is `bufbuild/plugins` on GitHub (`buf.plugin.yaml` + commit date, then
+    `source_url` → GitHub Release). Guessing `owner/name` from the BSR path alone is last resort:
+    `buf.build/connectrpc/rust` is not GitHub `connectrpc/rust`.
     """
     empty = ClearedPinTarget(
         ecosystem=BSR,
@@ -876,13 +972,18 @@ def _for_bsr(
             if _is_prerelease(ver):
                 continue
             candidates.append(_Candidate(version=ver, published_at=when, heuristic=when is None))
-    else:
+    if not candidates:
+        try:
+            candidates = _bsr_candidates_from_plugins_catalog(http, module, current=current_ver)
+        except (ValueError, urllib.error.HTTPError, NotPermitted, HostNotPermitted):
+            candidates = []
+    if not candidates:
         owner_repo = _bsr_github_repo(module)
         if owner_repo is None:
             return empty
         try:
             candidates = _bsr_candidates_from_github(http, owner_repo)
-        except ValueError, urllib.error.HTTPError, NotPermitted, HostNotPermitted:
+        except (ValueError, urllib.error.HTTPError, NotPermitted, HostNotPermitted):
             return empty
 
     if not candidates:
@@ -908,12 +1009,135 @@ def _bsr_module_ref(package: str) -> str:
 
 
 def _bsr_github_repo(module: str) -> str | None:
-    """Map `buf.build/owner/name` to GitHub `owner/name` (same path for anthropics/buffa, …)."""
+    """Map `buf.build/owner/name` to GitHub `owner/name` (last-resort heuristic only)."""
     text = module.removeprefix("buf.build/").strip("/")
     parts = [part for part in text.split("/") if part]
     if len(parts) < 2:
         return None
     return f"{parts[0]}/{parts[1]}"
+
+
+def _bsr_owner_plugin(module: str) -> tuple[str, str] | None:
+    text = module.removeprefix("buf.build/").strip("/")
+    parts = [part for part in text.split("/") if part]
+    if len(parts) < 2:
+        return None
+    return parts[0], parts[1]
+
+
+def _bsr_candidates_from_plugins_catalog(
+    http: HttpClient, module: str, *, current: str
+) -> list[_Candidate]:
+    """Versions from `bufbuild/plugins`; publish time = catalog commit, else `source_url` Release."""
+    owner_plugin = _bsr_owner_plugin(module)
+    if owner_plugin is None:
+        return []
+    owner, plugin = owner_plugin
+    base = f"plugins/{owner}/{plugin}"
+    listing = _json_get(
+        http, f"https://api.github.com/repos/bufbuild/plugins/contents/{base}?ref=main"
+    )
+    if not isinstance(listing, list):
+        return []
+    versions: list[str] = []
+    for entry in listing:
+        if not isinstance(entry, dict) or entry.get("type") != "dir":
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        ver = name.strip().removeprefix("v")
+        if not ver or _is_prerelease(ver):
+            continue
+        versions.append(ver)
+    if not versions:
+        return []
+    names = [v for v in _sort_versions(BSR, versions) if _on_line(BSR, current, v)]
+    lookup = list(names[:_MAX_LOOKUPS])
+    if current in names and current not in lookup:
+        lookup.append(current)
+    dated: dict[str, _Candidate] = {}
+    source_urls: dict[str, str] = {}
+    for ver in lookup:
+        folder = f"v{ver}"
+        published, heuristic = _bsr_plugin_publish_time(
+            http, path=f"{base}/{folder}/buf.plugin.yaml", version=ver, source_urls=source_urls
+        )
+        dated[ver] = _Candidate(version=ver, published_at=published, heuristic=heuristic)
+    candidates: list[_Candidate] = []
+    for ver in names:
+        if ver in dated:
+            candidates.append(dated[ver])
+        else:
+            candidates.append(_Candidate(version=ver, published_at=None, heuristic=True))
+    return candidates
+
+
+def _bsr_plugin_publish_time(
+    http: HttpClient,
+    *,
+    path: str,
+    version: str,
+    source_urls: dict[str, str],
+) -> tuple[str | None, bool]:
+    """Return (published_at, heuristic). Catalog commit first; source_url Release second."""
+    catalog = _github_path_oldest_commit(http, repo="bufbuild/plugins", path=path)
+    if catalog:
+        return catalog, False
+    source = source_urls.get(version) or _bsr_plugin_source_url(http, path)
+    if source:
+        source_urls[version] = source
+        owner_repo = _github_owner_repo(source)
+        if owner_repo:
+            release = action_publish_time(http, owner_repo, version)
+            if not release.found and not version.startswith("v"):
+                release = action_publish_time(http, owner_repo, f"v{version}")
+            if release.found and release.published_at:
+                return release.published_at, True
+    return None, True
+
+
+def _bsr_plugin_source_url(http: HttpClient, path: str) -> str | None:
+    url = f"https://raw.githubusercontent.com/bufbuild/plugins/main/{path}"
+    try:
+        response = http.get(url)
+    except urllib.error.HTTPError:
+        return None
+    match = re.search(r"(?m)^source_url:\s*(\S+)\s*$", response.body)
+    if not match:
+        return None
+    return match.group(1).strip().strip("\"'")
+
+
+def _github_path_oldest_commit(http: HttpClient, *, repo: str, path: str) -> str | None:
+    """Oldest commit on the first page for `path` (add-to-catalog date for rarely-touched files)."""
+    url = (
+        f"https://api.github.com/repos/{repo}/commits"
+        f"?path={urllib.parse.quote(path, safe='')}&per_page=100"
+    )
+    try:
+        response = http.get(url)
+    except urllib.error.HTTPError:
+        return None
+    try:
+        payload = json.loads(response.body)
+    except ValueError:
+        return None
+    if not isinstance(payload, list) or not payload:
+        return None
+    entry = payload[-1] if isinstance(payload[-1], dict) else None
+    if entry is None:
+        return None
+    commit = entry.get("commit")
+    if not isinstance(commit, dict):
+        return None
+    for key in ("committer", "author"):
+        who = commit.get(key)
+        if isinstance(who, dict):
+            when = who.get("date")
+            if isinstance(when, str) and when.strip():
+                return when.strip()
+    return None
 
 
 def _bsr_candidates_from_github(http: HttpClient, owner_repo: str) -> list[_Candidate]:
@@ -1037,6 +1261,8 @@ def _json_get(http: HttpClient, url: str) -> Any:
         response = http.get(url)
     except urllib.error.HTTPError as error:
         raise ValueError(f"{url}: HTTP {error.code}") from error
+    if response.truncated:
+        raise ValueError(f"{url} response was truncated")
     try:
         return json.loads(response.body)
     except ValueError as error:

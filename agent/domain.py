@@ -50,6 +50,19 @@ class Trigger(StrEnum):
 class Role(StrEnum):
     INTENT = "intent"
     ANALYST = "analyst"
+    SWEEPER = "sweeper"
+    """Mechanical dependency drift (maintain `deps-outdated`). Same abilities as analyst.
+
+    Optional in the overlay: when unbound, the run uses the `analyst` model. Products that want a
+    cheaper model for version sweeps bind `sweeper` without moving vuln/code work onto it.
+    """
+    VULN = "vuln"
+    """Advisory and code-vulnerability analysis (`deps-vuln`, `code-vuln`). Same abilities as analyst.
+
+    Optional in the overlay: when unbound, the run uses the `analyst` model. Bind a stronger or
+    specialised model here when one appears that is better at finding vulnerabilities, without
+    moving routine quality or outdated work onto it.
+    """
     FIXER = "fixer"
     WRITER = "writer"
 

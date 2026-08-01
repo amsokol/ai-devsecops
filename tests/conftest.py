@@ -33,8 +33,11 @@ INDEX = """\
 | `capabilities/deps-outdated` | capability | Version drift. | — |
 | `capabilities/deps-vuln` | capability | Known vulnerabilities. | — |
 | `policy/verdicts` | policy | Blocking rights. | — |
+| `policy/quarantine` | policy | Quarantine window. | — |
+| `evidence/acquisition` | policy | How to record facts. | — |
 | `ecosystems/python-uv` | ecosystem | uv-managed Python. | `pyproject.toml`, `uv.lock` |
 | `ecosystems/github-actions` | ecosystem | Workflow pins. | `.github/workflows` |
+| `ecosystems/bazel` | ecosystem | Bazel modules. | `MODULE.bazel` |
 """
 
 # The blocking table is parsed out of this document, so the fixture has to carry a real one. Its
@@ -63,15 +66,35 @@ DOCUMENTS = {
     "playbooks/maintain": "Maintain, never judge changes: see [review](pr-review.md).\n",
     "capabilities/code-quality": "Look for correctness risks.\n",
     "capabilities/code-vuln": "Look for security defects.\n",
-    "capabilities/deps-outdated": "Look for drift. See [verdicts](../policy/verdicts.md).\n",
+    "capabilities/deps-outdated": (
+        "Look for drift. See [verdicts](../policy/verdicts.md) and "
+        "[quarantine](../policy/quarantine.md).\n"
+    ),
     "capabilities/deps-vuln": "Look for advisories.\n",
     "policy/verdicts": VERDICTS,
+    "policy/quarantine": "Wait N days. See [acquisition](../evidence/acquisition.md).\n",
+    "evidence/acquisition": "Acquire first, decide afterwards.\n",
     "ecosystems/python-uv": (
-        "Use uv.\n\n## Requirements\n\n- Binaries: `uv`.\n- Hosts: `pypi.org`.\n\n## Detect\n\n"
+        "Use uv.\n\n## Capability profile\n\n"
+        "| Fact | Method | Source | Reliability |\n"
+        "| --- | --- | --- | --- |\n"
+        "| advisories | `tool` | `pip-audit` | reproducible |\n\n"
+        "## Requirements\n\n- Binaries: `uv`.\n- Hosts: `pypi.org`.\n\n## Detect\n\n"
         "A `uv.lock` in the tree.\n"
     ),
     "ecosystems/github-actions": (
-        "Pin actions.\n\n## Requirements\n\n- Binaries: `gh`.\n- Hosts: `api.github.com`.\n"
+        "Pin actions.\n\n## Capability profile\n\n"
+        "| Fact | Method | Source | Reliability |\n"
+        "| --- | --- | --- | --- |\n"
+        "| advisories | `web` | published advisories | heuristic |\n\n"
+        "## Requirements\n\n- Binaries: `gh`.\n- Hosts: `api.github.com`.\n"
+    ),
+    "ecosystems/bazel": (
+        "Bazel modules.\n\n## Capability profile\n\n"
+        "| Fact | Method | Source | Reliability |\n"
+        "| --- | --- | --- | --- |\n"
+        "| advisories | `none` | — | — |\n\n"
+        "## Requirements\n\n- Hosts: `bcr.bazel.build`.\n"
     ),
 }
 

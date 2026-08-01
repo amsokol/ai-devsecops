@@ -5,30 +5,31 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agent.census import incomplete_action_sweep
+from agent.census import incomplete_action_sweep, incomplete_pin_sweep
 from agent.domain import PlannedTask, Role
 from agent.evidence import Evidence, Origin, Subject
 
 
-def _task() -> PlannedTask:
+def _task(ecosystem: str = "ecosystems/github-actions") -> PlannedTask:
+    short = ecosystem.rsplit("/", 1)[-1]
     return PlannedTask(
-        id="deps-outdated@github-actions",
+        id=f"deps-outdated@{short}",
         capability="capabilities/deps-outdated",
         role=Role.ANALYST,
         required=True,
-        ecosystem="ecosystems/github-actions",
+        ecosystem=ecosystem,
     )
 
 
-def _fact(package: str) -> Evidence:
+def _fact(package: str, *, ecosystem: str = "ecosystems/github-actions") -> Evidence:
     return Evidence.verified(
         question="declared-pin",
-        subject=Subject(ecosystem="ecosystems/github-actions", package=package),
+        subject=Subject(ecosystem=ecosystem, package=package),
         value="v7",
         origin=Origin.TOOL,
-        source="list_action_pins",
+        source="list_declared_pins",
         observed_at=datetime(2026, 7, 27, tzinfo=UTC),
-        recipe="capabilities/deps-outdated@list_action_pins",
+        recipe="capabilities/deps-outdated@list_declared_pins",
     )
 
 
@@ -43,7 +44,7 @@ def test_incomplete_when_census_pins_lack_facts(tmp_path: Path) -> None:
     gap = incomplete_action_sweep(tmp_path, _task(), (_fact("actions/checkout"),))
     assert gap is not None
     assert "Swatinem/rust-cache" in gap
-    assert "list_action_pins" in gap
+    assert "list_declared_pins" in gap
 
 
 def test_complete_when_every_census_pin_has_a_fact(tmp_path: Path) -> None:
@@ -54,6 +55,24 @@ def test_complete_when_every_census_pin_has_a_fact(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert incomplete_action_sweep(tmp_path, _task(), (_fact("actions/checkout"),)) is None
+
+
+def test_incomplete_cargo_sweep_when_crate_skipped(tmp_path: Path) -> None:
+    (tmp_path / "Cargo.toml").write_text(
+        '[dependencies]\nserde = "1.0"\ntokio = "1.0"\n', encoding="utf-8"
+    )
+    eco = "ecosystems/cargo"
+    gap = incomplete_pin_sweep(tmp_path, _task(eco), (_fact("serde", ecosystem=eco),))
+    assert gap is not None
+    assert "tokio" in gap
+    assert (
+        incomplete_pin_sweep(
+            tmp_path,
+            _task(eco),
+            (_fact("serde", ecosystem=eco), _fact("tokio", ecosystem=eco)),
+        )
+        is None
+    )
 
 
 def test_committer_date_publish_time_fails_the_sweep(tmp_path: Path) -> None:
